@@ -1,0 +1,184 @@
+<script>
+  /**
+   * ============================================================================
+   * SISTEMA WEB INTEGRAL DE CONTROL DE BIENES Y EXISTENCIAS
+   * Archivo: charts_js.html (Visualizaci\u00F3n de Gr\u00E1ficos Interactivos con Chart.js)
+   * ============================================================================
+   */
+
+  var DashboardCharts = (function () {
+    var chartCondicion = null;
+    var chartCustodios = null;
+    var chartMovimientos = null;
+    var chartProporcion = null;
+
+    /**
+     * Renderiza o actualiza todos los gr\u00E1ficos del Dashboard a partir de los KPIs
+     * @param {Object} kpis 
+     */
+    function renderCharts(kpis) {
+      if (!window.Chart) {
+        console.warn('Chart.js no est\u00E1 disponible en la p\u00E1gina.');
+        return;
+      }
+
+      var bienes = kpis.bienes || {};
+      var existencias = kpis.existencias || {};
+
+      // 1. Gr\u00E1fico de Bienes por Condici\u00F3n (Doughnut)
+      var ctxCond = document.getElementById('chart-bienes-condicion');
+      if (ctxCond) {
+        var condData = bienes.bienesPorCondicion || {};
+        var labels = ['NUEVO', 'BUENO', 'REGULAR', 'MALO', 'DA\u00D1ADO', 'OBSOLETO', 'BAJA'];
+        var values = labels.map(function (l) { return condData[l] || 0; });
+        var colors = [
+          '#6366f1', // Nuevo (indigo)
+          '#10b981', // Bueno (emerald)
+          '#f59e0b', // Regular (amber)
+          '#ef4444', // Malo (red)
+          '#f97316', // Da\u00F1ado (orange)
+          '#64748b', // Obsoleto (slate)
+          '#be123c'  // Baja (rose)
+        ];
+
+        if (chartCondicion) chartCondicion.destroy();
+        chartCondicion = new Chart(ctxCond, {
+          type: 'doughnut',
+          data: {
+            labels: labels,
+            datasets: [{
+              data: values,
+              backgroundColor: colors,
+              borderWidth: 2,
+              borderColor: '#ffffff'
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: { boxWidth: 12, font: { size: 11, family: 'Inter' } }
+              }
+            },
+            cutout: '65%'
+          }
+        });
+      }
+
+      // 2. Gr\u00E1fico de Proporci\u00F3n BLD vs BCA (Doughnut peque\u00F1o)
+      var ctxProp = document.getElementById('chart-proporcion-tipo');
+      if (ctxProp) {
+        if (chartProporcion) chartProporcion.destroy();
+        chartProporcion = new Chart(ctxProp, {
+          type: 'doughnut',
+          data: {
+            labels: ['BLD (Larga Duraci\u00F3n)', 'BCA (Control Adm.)'],
+            datasets: [{
+              data: [bienes.totalBLD || 0, bienes.totalBCA || 0],
+              backgroundColor: ['#2563eb', '#f59e0b'],
+              borderWidth: 2,
+              borderColor: '#ffffff'
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                position: 'bottom',
+                labels: { boxWidth: 12, font: { size: 11, family: 'Inter' } }
+              }
+            },
+            cutout: '70%'
+          }
+        });
+      }
+
+      // 3. Gr\u00E1fico de Custodios con Mayor Cantidad de Bienes (Barra horizontal)
+      var ctxCust = document.getElementById('chart-top-custodios');
+      if (ctxCust) {
+        var topCust = bienes.topCustodios || [];
+        var custLabels = topCust.map(function (c) {
+          var n = c.custodio || 'Sin asignar';
+          return n.length > 20 ? n.substring(0, 18) + '...' : n;
+        });
+        var custValues = topCust.map(function (c) { return c.total || 0; });
+
+        if (chartCustodios) chartCustodios.destroy();
+        chartCustodios = new Chart(ctxCust, {
+          type: 'bar',
+          data: {
+            labels: custLabels,
+            datasets: [{
+              label: 'Bienes Asignados',
+              data: custValues,
+              backgroundColor: '#3b82f6',
+              borderRadius: 6
+            }]
+          },
+          options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false }
+            },
+            scales: {
+              x: {
+                beginAtZero: true,
+                ticks: { stepSize: 1, font: { family: 'Inter' } },
+                grid: { color: '#f1f5f9' }
+              },
+              y: {
+                grid: { display: false },
+                ticks: { font: { size: 11, family: 'Inter' } }
+              }
+            }
+          }
+        });
+      }
+
+      // 4. Gr\u00E1fico de Movimientos del Mes (Entradas vs Salidas)
+      var ctxMov = document.getElementById('chart-movimientos-mes');
+      if (ctxMov) {
+        if (chartMovimientos) chartMovimientos.destroy();
+        chartMovimientos = new Chart(ctxMov, {
+          type: 'bar',
+          data: {
+            labels: ['Entradas (Compras/Dev.)', 'Salidas (Entregas/Consumos)'],
+            datasets: [{
+              label: 'Unidades',
+              data: [existencias.totalEntradasMes || 0, existencias.totalSalidasMes || 0],
+              backgroundColor: ['#10b981', '#ef4444'],
+              borderRadius: 6
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { display: false }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                grid: { color: '#f1f5f9' },
+                ticks: { font: { family: 'Inter' } }
+              },
+              x: {
+                grid: { display: false },
+                ticks: { font: { family: 'Inter' } }
+              }
+            }
+          }
+        });
+      }
+    }
+
+    return {
+      renderCharts: renderCharts
+    };
+  })();
+</script>

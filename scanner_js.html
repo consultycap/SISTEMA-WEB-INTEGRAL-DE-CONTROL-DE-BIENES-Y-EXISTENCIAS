@@ -1,0 +1,529 @@
+<script>
+  /**
+   * ============================================================================
+   * SISTEMA WEB INTEGRAL DE CONTROL DE BIENES Y EXISTENCIAS
+   * Archivo: scanner_js.html (Motor de Escaneo QR y C\u00F3digo de Barras con ZXing)
+   * ============================================================================
+   */
+
+  var ScannerApp = (function () {
+    var scanMode = 'BIENES'; // 'BIENES' o 'EXISTENCIAS'
+    var audioCtx = null;
+
+    /** Escapa HTML de todos los valores de texto de un objeto (evita XSS desde celdas de la hoja) */
+    function seguro(obj) {
+      var o = {};
+      Object.keys(obj || {}).forEach(function (k) {
+        o[k] = typeof obj[k] === 'string' ? App.esc(obj[k]) : obj[k];
+      });
+      return o;
+    }
+
+    /**
+     * Inicializa el sintetizador de audio para el "bip" de escaneo exitoso
+     */
+    function reproducirBip() {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime); // Tono A5
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {
+        console.log('Audio bip no soportado:', e);
+      }
+    }
+
+    /** La cámara en vivo se eliminó: se escanea tomando una foto del código. Se conservan como no-op para el resto de la app. */
+    function initScanner() { }
+    function stopScanning() { }
+
+    /**
+     * Lee un c\u00F3digo QR / de barras desde una foto (c\u00E1mara nativa o galer\u00EDa)
+     */
+    function leerDesdeFoto(input) {
+      var file = input && input.files && input.files[0];
+      if (!file) return;
+
+      var statusText = document.getElementById('scanner-status-text');
+      if (statusText) statusText.innerText = 'Leyendo código de la foto...';
+      App.showLoading(true, 'Buscando el código en la foto...');
+
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        buscarCodigoEnImagen(img).then(function (texto) {
+          App.showLoading(false);
+          URL.revokeObjectURL(url);
+          input.value = '';
+          if (texto) {
+            reproducirBip();
+            var codigo = extraerCodigo(texto);
+            if (statusText) statusText.innerText = '¡Código detectado!: ' + codigo;
+            procesarCodigoEscaneado(codigo);
+          } else {
+            if (statusText) statusText.innerText = 'No se pudo leer el código en la foto.';
+            App.notify('Sin lectura',
+              'No se detectó el código. Acérquese hasta que el código ocupe buena parte de la foto, enfoque (toque la pantalla), evite reflejos y sombras. También puede escribirlo abajo.',
+              'warning');
+          }
+        }).catch(function (e) {
+          App.showLoading(false);
+          URL.revokeObjectURL(url);
+          input.value = '';
+          console.error('Error leyendo la foto:', e);
+          App.notify('Error', 'No se pudo procesar la imagen: ' + (e && e.message ? e.message : e), 'danger');
+        });
+      };
+      img.onerror = function () {
+        App.showLoading(false);
+        URL.revokeObjectURL(url);
+        input.value = '';
+        App.notify('Error', 'No se pudo abrir la imagen.', 'danger');
+      };
+      img.src = url;
+    }
+
+    /** Si el código trae texto extra (una URL, por ejemplo) se extrae el código del sistema */
+    function extraerCodigo(texto) {
+      var t = String(texto).trim();
+      var m = t.match(/\b(?:BLD|BCA)-\d{3,}\b|\b(?:EX|SUM)-\d{3,}\b/i);
+      return m ? m[0].toUpperCase() : t;
+    }
+
+    function pausa() { return new Promise(function (r) { setTimeout(r, 0); }); }
+
+    /** Dibuja una región de la imagen (opcionalmente rotada 90°) y devuelve sus píxeles */
+    function obtenerPixeles(img, maxLado, region, rotar) {
+      var sx = region ? Math.round(region.x * img.width) : 0;
+      var sy = region ? Math.round(region.y * img.height) : 0;
+      var sw = region ? Math.round(region.w * img.width) : img.width;
+      var sh = region ? Math.round(region.h * img.height) : img.height;
+      var escala = Math.min(1, maxLado / Math.max(sw, sh));
+      var w = Math.max(1, Math.round(sw * escala));
+      var h = Math.max(1, Math.round(sh * escala));
+      var canvas = document.createElement('canvas');
+      var ctx;
+      if (rotar) {
+        canvas.width = h; canvas.height = w;
+        ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.translate(h, 0); ctx.rotate(Math.PI / 2);
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+      } else {
+        canvas.width = w; canvas.height = h;
+        ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, w, h);
+      }
+      return ctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+
+    function decodificarJsQR(px) {
+      if (!window.jsQR) return null;
+      try {
+        var r = window.jsQR(px.data, px.width, px.height, { inversionAttempts: 'attemptBoth' });
+        return r && r.data ? r.data : null;
+      } catch (e) { return null; }
+    }
+
+    function decodificarZXing(px) {
+      if (!window.ZXing) return null;
+      try {
+        var n = px.width * px.height;
+        var lum = new Uint8ClampedArray(n);
+        var d = px.data;
+        for (var i = 0, j = 0; i < n; i++, j += 4) {
+          lum[i] = (d[j] * 306 + d[j + 1] * 601 + d[j + 2] * 117) >> 10;
+        }
+        var fuente = new ZXing.RGBLuminanceSource(lum, px.width, px.height);
+        var bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(fuente));
+        var hints = new Map();
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+        var lector = new ZXing.MultiFormatReader();
+        lector.setHints(hints);
+        return lector.decode(bitmap).getText();
+      } catch (e) { return null; }
+    }
+
+    /**
+     * Busca un código en una foto probando, en orden:
+     * 1) el detector nativo del navegador (el más robusto en Chrome / Android),
+     * 2) jsQR y ZXing sobre la foto completa a varios tamaños,
+     * 3) las mismas librerías sobre recortes (centro y cuadrantes), por si el código es pequeño,
+     * 4) ZXing con la imagen girada 90° (códigos de barras en vertical).
+     */
+    function buscarCodigoEnImagen(img) {
+      var pasos = [];
+
+      // 1) Detector nativo
+      pasos.push(function () {
+        if (!('BarcodeDetector' in window)) return Promise.resolve(null);
+        return Promise.resolve().then(function () {
+          return window.BarcodeDetector.getSupportedFormats ? window.BarcodeDetector.getSupportedFormats() : [];
+        }).then(function (formatos) {
+          var det = formatos && formatos.length ? new window.BarcodeDetector({ formats: formatos }) : new window.BarcodeDetector();
+          return det.detect(img);
+        }).then(function (codigos) {
+          return codigos && codigos.length ? codigos[0].rawValue : null;
+        }).catch(function () { return null; });
+      });
+
+      // 2) Foto completa a varios tamaños
+      [2000, 1400, 900, 600].forEach(function (lado) {
+        pasos.push(function () {
+          var px = obtenerPixeles(img, lado, null, false);
+          return decodificarJsQR(px) || decodificarZXing(px);
+        });
+      });
+
+      // 3) Recortes: centro y cuadrantes con solapamiento
+      var regiones = [
+        { x: 0.15, y: 0.15, w: 0.7, h: 0.7 },
+        { x: 0.25, y: 0.25, w: 0.5, h: 0.5 },
+        { x: 0.0, y: 0.0, w: 0.6, h: 0.6 }, { x: 0.4, y: 0.0, w: 0.6, h: 0.6 },
+        { x: 0.0, y: 0.4, w: 0.6, h: 0.6 }, { x: 0.4, y: 0.4, w: 0.6, h: 0.6 }
+      ];
+      regiones.forEach(function (reg) {
+        pasos.push(function () {
+          var px = obtenerPixeles(img, 1400, reg, false);
+          return decodificarJsQR(px) || decodificarZXing(px);
+        });
+      });
+
+      // 4) Girada 90° (barras verticales)
+      [1600, 1000].forEach(function (lado) {
+        pasos.push(function () {
+          return decodificarZXing(obtenerPixeles(img, lado, null, true));
+        });
+      });
+
+      var idx = 0;
+      function siguiente() {
+        if (idx >= pasos.length) return Promise.resolve(null);
+        var paso = pasos[idx++];
+        return pausa().then(function () { return paso(); }).then(function (r) {
+          return r ? r : siguiente();
+        });
+      }
+      return siguiente();
+    }
+
+    /**
+     * Procesa el c\u00F3digo (ya sea por escaneo o por entrada manual)
+     * @param {string} codigo 
+     */
+    function procesarCodigoEscaneado(codigo) {
+      if (!codigo) return;
+      codigo = codigo.trim().toUpperCase();
+
+      // Actualizar campo manual
+      var inputManual = document.getElementById('input-manual-code');
+      if (inputManual) inputManual.value = codigo;
+
+      var container = document.getElementById('scan-result-container');
+      if (container) {
+        container.innerHTML = '<div class="text-center p-3"><div class="spinner-border text-primary" role="status"></div><p class="mt-2 text-muted">Consultando registro ' + App.esc(codigo) + ' en la base de datos...</p></div>';
+        container.style.display = 'block';
+      }
+
+      if (scanMode === 'BIENES') {
+        App.gasRun('obtenerBienPorCodigo', App.getToken(), codigo)
+          .then(function (res) {
+            if (res.success && res.data) {
+              renderResultadoBien(res.data);
+            } else {
+              renderErrorNoEncontrado('Bien no encontrado', 'No existe ning\u00FAn bien patrimonial registrado con el c\u00F3digo <b>' + App.esc(codigo) + '</b>.');
+            }
+          })
+          .catch(function (err) {
+            renderErrorNoEncontrado('Error en consulta', App.esc(err.message));
+          });
+      } else {
+        // Modo EXISTENCIAS
+        App.gasRun('obtenerExistenciaPorCodigo', App.getToken(), codigo)
+          .then(function (res) {
+            if (res.success && res.data) {
+              renderResultadoExistencia(res.data);
+            } else {
+              renderErrorNoEncontrado('Suministro no encontrado', 'No existe ninguna existencia con c\u00F3digo <b>' + App.esc(codigo) + '</b>.');
+            }
+          })
+          .catch(function (err) {
+            renderErrorNoEncontrado('Error en consulta', App.esc(err.message));
+          });
+      }
+    }
+
+    /**
+     * Renderiza la tarjeta de constataci\u00F3n para un BIEN
+     */
+    function renderResultadoBien(bien) {
+      var container = document.getElementById('scan-result-container');
+      if (!container) return;
+      bien = seguro(bien);
+
+      var badgeTipoClass = (bien.TIPO_BIEN === 'BLD') ? 'badge-bld' : 'badge-bca';
+      var badgeCondClass = 'badge-' + String(bien.CONDICION || 'bueno').toLowerCase().replace('\u00F1', 'n');
+
+      var html = `
+      <div class="scan-result-card">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <span class="badge-custom ${badgeTipoClass} me-1">${bien.TIPO_BIEN}</span>
+            <span class="badge-custom ${badgeCondClass}">${bien.CONDICION}</span>
+            <h4 class="mt-2 mb-1 text-primary font-monospace fw-bold">${bien.CODIGO_BIEN}</h4>
+            <h5 class="fw-bold mb-1">${bien.BIEN}</h5>
+          </div>
+          <button type="button" class="btn-close" onclick="ScannerApp.cerrarResultado()" aria-label="Cerrar"></button>
+        </div>
+
+        <div class="row g-2 mb-3 text-muted small bg-light p-2 rounded">
+          <div class="col-6"><strong>Custodio:</strong> ${bien.CUSTODIO || 'Sin Asignar'}</div>
+          <div class="col-6"><strong>Ubicaci\u00F3n:</strong> ${bien.UBICACION || 'N/A'}</div>
+          <div class="col-6"><strong>Marca/Modelo:</strong> ${(bien.MARCA || '') + ' ' + (bien.MODELO || '')}</div>
+          <div class="col-6"><strong>Serie:</strong> ${bien.SERIE || 'S/N'}</div>
+          <div class="col-6"><strong>Valor Contable:</strong> $${parseFloat(bien.VALOR_CONTABLE || 0).toFixed(2)}</div>
+          <div class="col-6"><strong>Cuenta:</strong> ${bien.CUENTA_CONTABLE || 'N/A'}</div>
+        </div>
+
+        <div class="border-top pt-3">
+          <h6 class="fw-bold mb-2 text-dark"><i class="bi bi-clipboard-check me-1 text-success"></i> Registrar Constataci\u00F3n F\u00EDsica</h6>
+          
+          <div class="mb-2">
+            <label class="form-label small fw-bold mb-1">Nueva Condici\u00F3n F\u00EDsica Observada:</label>
+            <select id="constatacion-nueva-condicion" class="form-select form-select-sm">
+              <option value="NUEVO" ${bien.CONDICION === 'NUEVO' ? 'selected' : ''}>NUEVO</option>
+              <option value="BUENO" ${bien.CONDICION === 'BUENO' ? 'selected' : ''}>BUENO</option>
+              <option value="REGULAR" ${bien.CONDICION === 'REGULAR' ? 'selected' : ''}>REGULAR</option>
+              <option value="MALO" ${bien.CONDICION === 'MALO' ? 'selected' : ''}>MALO</option>
+              <option value="DA\u00D1ADO" ${bien.CONDICION === 'DA\u00D1ADO' ? 'selected' : ''}>DA\u00D1ADO</option>
+              <option value="OBSOLETO" ${bien.CONDICION === 'OBSOLETO' ? 'selected' : ''}>OBSOLETO</option>
+              <option value="BAJA" ${bien.CONDICION === 'BAJA' ? 'selected' : ''}>BAJA</option>
+            </select>
+          </div>
+
+          <div class="mb-2">
+            <label class="form-label small fw-bold mb-1">Novedad / Observaci\u00F3n de Campo:</label>
+            <textarea id="constatacion-novedad" class="form-control form-control-sm" rows="2" placeholder="Ej: Equipo verificado en escritorio de custodio, etiqueta en buen estado..."></textarea>
+          </div>
+
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="check-actualizar-bien" checked>
+            <label class="form-check-label small" for="check-actualizar-bien">
+              Actualizar autom\u00E1ticamente la condici\u00F3n en la ficha principal del bien
+            </label>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button class="btn btn-success btn-sm fw-bold py-2" onclick="ScannerApp.guardarConstatacionBien('${bien.CODIGO_BIEN}')">
+              <i class="bi bi-check2-circle me-1"></i> Confirmar y Guardar Constataci\u00F3n
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+      container.innerHTML = html;
+    }
+
+    /**
+     * Renderiza la tarjeta de constataci\u00F3n para una EXISTENCIA
+     */
+    function renderResultadoExistencia(item) {
+      var container = document.getElementById('scan-result-container');
+      if (!container) return;
+      item = seguro(item);
+
+      var html = `
+      <div class="scan-result-card">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <span class="badge-custom badge-bueno">${item.ESTADO || 'BUENO'}</span>
+            <h4 class="mt-2 mb-1 text-primary font-monospace fw-bold">${item.CODIGO}</h4>
+            <h5 class="fw-bold mb-1">${item.DESCRIPCION}</h5>
+          </div>
+          <button type="button" class="btn-close" onclick="ScannerApp.cerrarResultado()" aria-label="Cerrar"></button>
+        </div>
+
+        <div class="row g-2 mb-3 bg-light p-2 rounded small">
+          <div class="col-6"><strong>Stock en Sistema:</strong> <span class="badge bg-primary fs-6">${item.CANTIDAD}</span></div>
+          <div class="col-6"><strong>Cuenta Contable:</strong> ${item.CUENTA_CONTABLE || 'N/A'}</div>
+        </div>
+
+        <div class="border-top pt-3">
+          <h6 class="fw-bold mb-2 text-dark"><i class="bi bi-calculator me-1 text-success"></i> Conteo F\u00EDsico en Bodega</h6>
+
+          <div class="row g-2 mb-2">
+            <div class="col-6">
+              <label class="form-label small fw-bold mb-1">Cantidad F\u00EDsica Contada:</label>
+              <input type="number" id="const-stock-fisico" class="form-control form-control-sm" value="${item.CANTIDAD}" min="0" step="1" oninput="ScannerApp.calcularDiferencia(${item.CANTIDAD})">
+            </div>
+            <div class="col-6">
+              <label class="form-label small fw-bold mb-1">Diferencia:</label>
+              <div id="box-diferencia" class="form-control form-control-sm text-center fw-bold bg-light">0</div>
+            </div>
+          </div>
+
+          <div class="mb-2">
+            <label class="form-label small fw-bold mb-1">Estado F\u00EDsico del Producto:</label>
+            <select id="const-estado-existencia" class="form-select form-select-sm">
+              <option value="BUENO" ${item.ESTADO === 'BUENO' ? 'selected' : ''}>BUENO</option>
+              <option value="REGULAR" ${item.ESTADO === 'REGULAR' ? 'selected' : ''}>REGULAR</option>
+              <option value="DETERIORADO" ${item.ESTADO === 'DETERIORADO' ? 'selected' : ''}>DETERIORADO</option>
+              <option value="OBSOLETO" ${item.ESTADO === 'OBSOLETO' ? 'selected' : ''}>OBSOLETO</option>
+              <option value="BAJA" ${item.ESTADO === 'BAJA' ? 'selected' : ''}>BAJA</option>
+            </select>
+          </div>
+
+          <div class="mb-2">
+            <label class="form-label small fw-bold mb-1">Observaci\u00F3n:</label>
+            <input type="text" id="const-obs-existencia" class="form-control form-control-sm" placeholder="Detalle de conteo o motivo de diferencia">
+          </div>
+
+          <div class="form-check form-switch mb-3">
+            <input class="form-check-input" type="checkbox" id="check-ajustar-kardex" checked>
+            <label class="form-check-label small" for="check-ajustar-kardex">
+              Ajustar Kardex y stock en sistema autom\u00E1ticamente si hay diferencia
+            </label>
+          </div>
+
+          <div class="d-grid gap-2">
+            <button class="btn btn-success btn-sm fw-bold py-2" onclick="ScannerApp.guardarConstatacionExistencia('${item.CODIGO}')">
+              <i class="bi bi-save me-1"></i> Guardar Constataci\u00F3n de Existencias
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+      container.innerHTML = html;
+    }
+
+    function calcularDiferencia(stockSistema) {
+      var inputFisico = document.getElementById('const-stock-fisico');
+      var box = document.getElementById('box-diferencia');
+      if (!inputFisico || !box) return;
+      var fisico = parseFloat(inputFisico.value) || 0;
+      var dif = fisico - stockSistema;
+      box.innerText = (dif > 0 ? '+' : '') + dif;
+      box.className = 'form-control form-control-sm text-center fw-bold ' + (dif === 0 ? 'bg-light text-dark' : (dif < 0 ? 'bg-danger text-white' : 'bg-warning text-dark'));
+    }
+
+    function renderErrorNoEncontrado(titulo, mensaje) {
+      var container = document.getElementById('scan-result-container');
+      if (!container) return;
+      container.innerHTML = `
+      <div class="alert alert-danger alert-dismissible fade show" role="alert">
+        <h5 class="alert-heading fw-bold mb-1"><i class="bi bi-exclamation-triangle-fill me-1"></i> ${titulo}</h5>
+        <p class="mb-0 small">${mensaje}</p>
+        <button type="button" class="btn-close" onclick="ScannerApp.cerrarResultado()" aria-label="Cerrar"></button>
+      </div>
+    `;
+    }
+
+    function cerrarResultado() {
+      var container = document.getElementById('scan-result-container');
+      if (container) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+      }
+    }
+
+    function guardarConstatacionBien(codigoBien) {
+      var nuevaCond = document.getElementById('constatacion-nueva-condicion').value;
+      var novedad = document.getElementById('constatacion-novedad').value;
+      var actualizar = document.getElementById('check-actualizar-bien').checked;
+
+      App.showLoading(true, 'Guardando constataci\u00F3n de bien...');
+      App.gasRun('registrarConstatacionBien', App.getToken(), {
+        codigoBien: codigoBien,
+        condicionFisica: nuevaCond,
+        novedad: novedad,
+        actualizarCondicionEnBien: actualizar
+      }).then(function (res) {
+        App.showLoading(false);
+        if (res.success) {
+          App.notify('\u00C9xito', res.message, 'success');
+          cerrarResultado();
+          // Recargar datos si estamos en vistas correspondientes
+          if (typeof App.cargarBienes === 'function') App.cargarBienes();
+        } else {
+          App.notify('Error', res.message, 'danger');
+        }
+      }).catch(function (err) {
+        App.showLoading(false);
+        App.notify('Error', err.message, 'danger');
+      });
+    }
+
+    function guardarConstatacionExistencia(codigo) {
+      var fisico = document.getElementById('const-stock-fisico').value;
+      var estado = document.getElementById('const-estado-existencia').value;
+      var obs = document.getElementById('const-obs-existencia').value;
+      var ajustar = document.getElementById('check-ajustar-kardex').checked;
+
+      if (fisico === '' || isNaN(parseFloat(fisico)) || parseFloat(fisico) < 0) {
+        App.notify('Dato requerido', 'Ingrese la cantidad f\u00EDsica contada (0 o m\u00E1s).', 'warning');
+        return;
+      }
+
+      App.showLoading(true, 'Guardando constataci\u00F3n de existencias...');
+      App.gasRun('registrarConstatacionExistencia', App.getToken(), {
+        codigo: codigo,
+        stockFisico: fisico,
+        estado: estado,
+        observacion: obs,
+        aplicarAjusteKardex: ajustar
+      }).then(function (res) {
+        App.showLoading(false);
+        if (res.success) {
+          App.notify('\u00C9xito', res.message, 'success');
+          cerrarResultado();
+          if (typeof App.cargarExistencias === 'function') App.cargarExistencias();
+          if (typeof App.cargarMovimientos === 'function') App.cargarMovimientos();
+        } else {
+          App.notify('Error', res.message, 'danger');
+        }
+      }).catch(function (err) {
+        App.showLoading(false);
+        App.notify('Error', err.message, 'danger');
+      });
+    }
+
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' && ev.target && ev.target.id === 'input-manual-code') {
+        ev.preventDefault();
+        procesarCodigoEscaneado(ev.target.value);
+      }
+    });
+
+    function setScanMode(mode) {
+      scanMode = mode;
+      var tabB = document.getElementById('tab-mode-bienes');
+      var tabE = document.getElementById('tab-mode-existencias');
+      if (tabB) tabB.classList.toggle('active', mode === 'BIENES');
+      if (tabE) tabE.classList.toggle('active', mode === 'EXISTENCIAS');
+      cerrarResultado();
+    }
+
+    return {
+      initScanner: initScanner,
+      leerDesdeFoto: leerDesdeFoto,
+      stopScanning: stopScanning,
+      procesarCodigoEscaneado: procesarCodigoEscaneado,
+      cerrarResultado: cerrarResultado,
+      guardarConstatacionBien: guardarConstatacionBien,
+      guardarConstatacionExistencia: guardarConstatacionExistencia,
+      calcularDiferencia: calcularDiferencia,
+      setScanMode: setScanMode
+    };
+  })();
+</script>

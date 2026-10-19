@@ -1,0 +1,1226 @@
+<script>
+  /**
+   * ============================================================================
+   * CONTROLADOR PRINCIPAL Y ENRUTADOR FRONTEND  (v2.6)
+   * Archivo: app_js.html
+   * ============================================================================
+   */
+
+  window.App = (function () {
+    var currentUser = null;
+    var currentToken = null;
+    var cacheBienes = [];
+    var cacheCustodios = [];
+    var cacheExistencias = [];
+    var cacheUsuarios = [];
+    var importState = { tipo: '', filas: [] };
+    var timers = {};
+    var currentView = 'dashboard';
+    var actaActual = null;
+    var historialTipo = 'BIENES';
+
+    // ---------------------------------------------------------------- Utilidades
+    function esc(v) {
+      return String(v === undefined || v === null ? '' : v).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+      });
+    }
+
+    function debounce(key, fn, ms) {
+      clearTimeout(timers[key]);
+      timers[key] = setTimeout(fn, ms || 350);
+    }
+
+    function el(id) { return document.getElementById(id); }
+    function val(id) { var e = el(id); return e ? e.value : ''; }
+    function setVal(id, v) { var e = el(id); if (e) e.value = (v === undefined || v === null) ? '' : v; }
+    function money(n) { return '$' + (parseFloat(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    function getToken() { return currentToken; }
+    function esAdmin() { return currentUser && currentUser.rol === 'ADMINISTRADOR'; }
+    function puedeEscribir() { return currentUser && (currentUser.rol === 'ADMINISTRADOR' || currentUser.rol === 'INVENTARIADOR'); }
+
+    function badgeCond(c) {
+      var k = String(c || '').toLowerCase().replace('ñ', 'n');
+      return '<span class="badge-custom badge-' + esc(k) + '">' + esc(c || '') + '</span>';
+    }
+
+    function showLoading(show, message) {
+      var loader = el('global-loading-overlay');
+      var msg = el('global-loading-message');
+      if (loader) loader.style.display = show ? 'flex' : 'none';
+      if (msg && message) msg.innerText = message;
+    }
+
+    /** Notificaciones flotantes (reemplaza a alert) */
+    function notify(titulo, mensaje, tipo) {
+      var cont = el('toast-notification-container');
+      if (!cont) { alert((titulo ? titulo + ': ' : '') + mensaje); return; }
+      var clase = { success: 'success', danger: 'danger', warning: 'warning', info: 'info' }[tipo] || 'info';
+      var div = document.createElement('div');
+      div.className = 'alert alert-' + clase + ' shadow alert-dismissible fade show mb-2';
+      div.setAttribute('role', 'alert');
+      div.innerHTML = (titulo ? '<strong>' + esc(titulo) + '</strong><br>' : '') + '<span class="small">' + esc(mensaje) + '</span>' +
+        '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Cerrar"></button>';
+      cont.appendChild(div);
+      setTimeout(function () { if (div.parentNode) div.parentNode.removeChild(div); }, 5500);
+    }
+
+    function modal(id) { return bootstrap.Modal.getOrCreateInstance(el(id)); }
+    function ocultarModal(id) { var m = bootstrap.Modal.getInstance(el(id)); if (m) m.hide(); }
+
+    // ---------------------------------------------------------------- Comunicación con Apps Script
+    var SafeStorage = (function () {
+      var mem = {};
+      return {
+        getItem: function (k) { try { return window.localStorage.getItem(k); } catch (e) { return mem[k] || null; } },
+        setItem: function (k, v) { try { window.localStorage.setItem(k, String(v)); } catch (e) { mem[k] = String(v); } },
+        removeItem: function (k) { try { window.localStorage.removeItem(k); } catch (e) { delete mem[k]; } }
+      };
+    })();
+
+    function gasRun(funcName) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        return Promise.reject(new Error('Entorno de ejecución no reconocido.'));
+      }
+      return new Promise(function (resolve, reject) {
+        var runner = google.script.run
+          .withSuccessHandler(resolve)
+          .withFailureHandler(function (err) { reject(err instanceof Error ? err : new Error(err && err.message ? err.message : String(err))); });
+        if (typeof runner[funcName] !== 'function') {
+          reject(new Error('La función ' + funcName + ' no existe en Apps Script.'));
+          return;
+        }
+        runner[funcName].apply(runner, args);
+      }).then(function (res) {
+        // Sesión vencida o revocada: volver al login
+        if (res && res.success === false && /sesi[oó]n\s+(no\s+v[aá]lida|inv[aá]lida)/i.test(res.message || '')) {
+          cerrarPorExpiracion();
+        }
+        return res;
+      });
+    }
+
+    function cerrarPorExpiracion() {
+      if (!currentToken) return;
+      limpiarSesionLocal();
+      showLoading(false);
+      mostrarPantallaLogin('Su sesión expiró. Ingrese nuevamente.');
+    }
+
+    function ok(res) { return res && res.success; }
+    function fail(res, e) { notify('Error', (res && res.message) || (e && e.message) || 'Error inesperado', 'danger'); }
+
+    // ---------------------------------------------------------------- Sesión
+    function init() {
+      bindEventosGlobales();
+      verificarSesionGuardada();
+    }
+
+    function verificarSesionGuardada() {
+      var token = SafeStorage.getItem('sibi_token');
+      if (!token) { mostrarPantallaLogin(); return; }
+      showLoading(true, 'Verificando sesión...');
+      currentToken = token;
+      gasRun('validarSesion', token).then(function (res) {
+        if (ok(res)) {
+          currentUser = res.usuario;
+          mostrarAplicacionAutenticada();
+        } else {
+          limpiarSesionLocal();
+          showLoading(false);
+          mostrarPantallaLogin();
+        }
+      }).catch(function () {
+        limpiarSesionLocal();
+        showLoading(false);
+        mostrarPantallaLogin();
+      });
+    }
+
+    function limpiarSesionLocal() {
+      SafeStorage.removeItem('sibi_token');
+      SafeStorage.removeItem('sibi_user');
+      currentUser = null;
+      currentToken = null;
+      cacheBienes = []; cacheCustodios = []; cacheExistencias = []; cacheUsuarios = [];
+      if (window.ScannerApp) { try { ScannerApp.stopScanning(); } catch (e) { } }
+    }
+
+    function mostrarPantallaLogin(mensaje) {
+      var vLogin = el('view-login');
+      var aLayout = el('app-layout');
+      if (vLogin) vLogin.style.display = 'flex';
+      if (aLayout) aLayout.style.display = 'none';
+      setVal('login-password', '');
+      mostrarErrorLogin(mensaje || '');
+    }
+
+    function mostrarErrorLogin(msg) {
+      var box = el('login-error-msg');
+      if (!box) return;
+      box.style.display = msg ? 'block' : 'none';
+      var span = box.querySelector('span');
+      if (span) span.textContent = msg || '';
+    }
+
+    function mostrarAplicacionAutenticada() {
+      showLoading(false);
+      el('view-login').style.display = 'none';
+      var aLayout = el('app-layout');
+      aLayout.style.display = 'flex';
+
+      var nombre = currentUser.nombre || currentUser.email || '';
+      var partes = String(nombre).replace(/^(Ing|Lic|Dr|Dra|Econ|Abg|Mgs|Msc)\.\s*/i, '').split(/\s+/);
+      var iniciales = ((partes[0] || '')[0] || '') + ((partes[1] || '')[0] || '');
+      if (el('sidebar-user-name')) el('sidebar-user-name').innerText = nombre;
+      if (el('sidebar-user-role')) el('sidebar-user-role').innerText = currentUser.rol || 'USUARIO';
+      if (el('header-user-role')) el('header-user-role').innerText = currentUser.rol || '';
+      if (el('sidebar-user-avatar')) el('sidebar-user-avatar').innerText = (iniciales || 'US').toUpperCase();
+
+      aplicarRoles();
+      navTo('dashboard');
+    }
+
+    function ejecutarLogin(e) {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault();
+      var email = val('login-email').trim();
+      var pass = val('login-password');
+      var btn = el('btn-submit-login');
+
+      if (!email || !pass) { mostrarErrorLogin('Ingrese su correo y contraseña.'); return false; }
+      mostrarErrorLogin('');
+      if (btn) { btn.disabled = true; btn.innerText = 'Verificando...'; }
+
+      gasRun('iniciarSesion', email, pass).then(function (res) {
+        if (btn) { btn.disabled = false; btn.innerText = 'INGRESAR AL SISTEMA'; }
+        if (ok(res)) {
+          currentUser = res.usuario;
+          currentToken = res.token;
+          SafeStorage.setItem('sibi_token', res.token);
+          mostrarAplicacionAutenticada();
+        } else {
+          mostrarErrorLogin((res && res.message) || 'Credenciales inválidas.');
+        }
+      }).catch(function (err) {
+        if (btn) { btn.disabled = false; btn.innerText = 'INGRESAR AL SISTEMA'; }
+        mostrarErrorLogin(err.message || 'No se pudo conectar con el servidor.');
+      });
+      return false;
+    }
+
+    function logout() {
+      var t = currentToken;
+      limpiarSesionLocal();
+      if (t) gasRun('cerrarSesion', t).catch(function () { });
+      mostrarPantallaLogin();
+    }
+
+    /** Muestra/oculta opciones según el rol (el servidor vuelve a validar todo) */
+    function aplicarRoles() {
+      var admin = esAdmin();
+      var rol = currentUser ? currentUser.rol : '';
+      function mostrar(sel, visible) {
+        document.querySelectorAll(sel).forEach(function (n) { n.style.display = visible ? '' : 'none'; });
+      }
+      mostrar('#nav-item-usuarios', admin);
+      mostrar('#nav-item-importacion', admin);
+      mostrar('#nav-item-auditoria', admin || rol === 'CONSULTA');
+      mostrar('#nav-item-config', admin);
+      mostrar('[data-view="rondas"]', puedeEscribir());
+      mostrar('[data-view="constatacion"]', puedeEscribir());
+      mostrar('.role-action-btn', puedeEscribir());
+    }
+
+    function vistaPermitida(v) {
+      if (v === 'usuarios' || v === 'importacion' || v === 'config') return esAdmin();
+      if (v === 'rondas') return puedeEscribir();
+      if (v === 'auditoria') return esAdmin() || (currentUser && currentUser.rol === 'CONSULTA');
+      if (v === 'constatacion') return puedeEscribir();
+      return true;
+    }
+
+    // ---------------------------------------------------------------- Navegación
+    function navTo(viewName) {
+      if (!currentUser) return;
+      if (!vistaPermitida(viewName)) { notify('Acceso restringido', 'Su rol no tiene acceso a esta sección.', 'warning'); viewName = 'dashboard'; }
+
+      if (currentView === 'constatacion' && viewName !== 'constatacion' && window.ScannerApp) {
+        try { ScannerApp.stopScanning(); } catch (e) { }
+      }
+      currentView = viewName;
+
+      document.querySelectorAll('.view-section').forEach(function (s) { s.classList.remove('active'); });
+      var target = el('view-' + viewName);
+      if (target) target.classList.add('active');
+
+      document.querySelectorAll('.nav-link-custom[data-view], .bottom-nav-item[data-view]').forEach(function (a) {
+        a.classList.toggle('active', a.getAttribute('data-view') === viewName);
+      });
+
+      var sidebar = document.querySelector('.app-sidebar');
+      if (sidebar) sidebar.classList.remove('show');
+      window.scrollTo(0, 0);
+
+      switch (viewName) {
+        case 'dashboard': cargarDashboard(); break;
+        case 'bienes': cargarBienes(); break;
+        case 'existencias': cargarExistencias(); break;
+        case 'custodios': cargarCustodios(); break;
+        case 'movimientos': cargarMovimientos(); break;
+        case 'auditoria': cargarAuditoria(); break;
+        case 'usuarios': cargarUsuarios(); break;
+        case 'constatacion': if (window.ScannerApp) ScannerApp.initScanner(); break;
+        case 'reportes': prepararReportes(); break;
+        case 'historial': cargarHistorial(); break;
+        case 'rondas': if (window.Mejoras) Mejoras.cargarRondas(); break;
+        case 'config': if (window.Mejoras) Mejoras.cargarConfig(); break;
+      }
+    }
+
+    function bindEventosGlobales() {
+      // Menú lateral en móvil
+      var toggle = el('btn-toggle-sidebar');
+      if (toggle) toggle.addEventListener('click', function () {
+        var sb = document.querySelector('.app-sidebar');
+        if (sb) sb.classList.toggle('show');
+      });
+
+      document.addEventListener('click', function (ev) {
+        var t = ev.target;
+
+        // Cerrar menú al tocar fuera
+        var sb = document.querySelector('.app-sidebar');
+        if (sb && sb.classList.contains('show') && !t.closest('.app-sidebar') && !t.closest('#btn-toggle-sidebar') && !t.closest('.mobile-bottom-nav')) {
+          sb.classList.remove('show');
+        }
+
+        // Acciones de las tablas (data-act / data-id)
+        var btn = t.closest('[data-act]');
+        if (!btn) return;
+        var id = btn.getAttribute('data-id');
+        switch (btn.getAttribute('data-act')) {
+          case 'bien-editar': abrirModalEditarBien(id); break;
+          case 'bien-qr': mostrarQR(id); break;
+          case 'bien-foto': if (window.Mejoras) Mejoras.verFoto(id); break;
+          case 'bien-baja': darDeBajaBien(id); break;
+          case 'bien-eliminar': eliminarBien(id); break;
+          case 'cust-editar': abrirModalEditarCustodio(id); break;
+          case 'cust-eliminar': eliminarCustodio(id); break;
+          case 'cust-acta': verActaCustodio(id); break;
+          case 'ex-kardex': verKardex(id); break;
+          case 'ex-minimo': cambiarStockMinimo(id); break;
+          case 'user-editar': abrirModalEditarUsuario(id); break;
+          case 'user-eliminar': eliminarUsuario(id); break;
+        }
+      });
+
+      // Importación: al elegir archivo o cambiar el destino
+      document.addEventListener('change', function (ev) {
+        if (ev.target && ev.target.id === 'input-file-import') procesarArchivoImportacion(ev.target.files && ev.target.files[0]);
+        if (ev.target && ev.target.id === 'import-modulo-select') resetImportacion(true);
+      });
+
+      window.addEventListener('afterprint', function () {
+        document.body.classList.remove('printing-qr', 'printing-acta');
+      });
+    }
+
+    // ---------------------------------------------------------------- Cachés compartidas
+    function asegurarCustodios(forzar) {
+      if (cacheCustodios.length && !forzar) return Promise.resolve(cacheCustodios);
+      return gasRun('listarCustodios', currentToken).then(function (res) {
+        if (ok(res)) cacheCustodios = res.data || [];
+        return cacheCustodios;
+      });
+    }
+
+    function asegurarExistencias(forzar) {
+      if (cacheExistencias.length && !forzar) return Promise.resolve(cacheExistencias);
+      return gasRun('listarExistencias', currentToken, {}).then(function (res) {
+        if (ok(res)) cacheExistencias = res.data || [];
+        return cacheExistencias;
+      });
+    }
+
+    function poblarSelect(id, items, valorFn, textoFn, primera) {
+      var sel = el(id);
+      if (!sel) return;
+      var actual = sel.value;
+      var html = '<option value="TODOS">' + esc(primera) + '</option>';
+      items.forEach(function (it) { html += '<option value="' + esc(valorFn(it)) + '">' + esc(textoFn(it)) + '</option>'; });
+      sel.innerHTML = html;
+      if (actual) sel.value = actual;
+      if (sel.value !== actual) sel.value = 'TODOS';
+    }
+
+    // ---------------------------------------------------------------- Dashboard
+    function cargarDashboard() {
+      showLoading(true, 'Cargando tablero...');
+      gasRun('obtenerDashboardKPIs', currentToken).then(function (res) {
+        showLoading(false);
+        if (ok(res) && res.kpis) {
+          actualizarTarjetasKPI(res.kpis);
+          if (window.DashboardCharts) window.DashboardCharts.renderCharts(res.kpis);
+        } else if (res) { fail(res); }
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function actualizarTarjetasKPI(k) {
+      var b = k.bienes || {}, e = k.existencias || {};
+      function set(id, v) { var n = el(id); if (n) n.innerText = v; }
+      set('kpi-total-bienes', b.totalBienes || 0);
+      set('kpi-valor-contable', money(b.valorContableTotal));
+      set('kpi-total-bld', b.totalBLD || 0);
+      set('kpi-total-bca', b.totalBCA || 0);
+      set('kpi-total-productos', e.totalProductos || 0);
+      set('kpi-bajo-stock', e.productosBajoMinimo || 0);
+      set('kpi-movimientos-mes', e.movimientosMesActual || 0);
+    }
+
+    // ---------------------------------------------------------------- Bienes
+    function filtrarBienes() { debounce('bienes', function () { cargarBienes(true); }); }
+
+    function cargarBienes(silencioso) {
+      if (!silencioso) showLoading(true, 'Cargando bienes...');
+      return asegurarCustodios().then(function () {
+        poblarSelect('filter-bien-custodio', cacheCustodios, function (c) { return c.NOMBRE; }, function (c) { return c.NOMBRE; }, 'Todos los custodios');
+        var filtros = {
+          busqueda: val('filter-bien-busqueda'),
+          tipo: val('filter-bien-tipo') || 'TODOS',
+          condicion: val('filter-bien-condicion') || 'TODOS',
+          custodio: val('filter-bien-custodio') || 'TODOS'
+        };
+        return gasRun('listarBienes', currentToken, filtros);
+      }).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { cacheBienes = res.data || []; renderTablaBienes(cacheBienes); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function renderTablaBienes(bienes) {
+      var tbody = el('tbody-bienes');
+      if (!tbody) return;
+      if (!bienes.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-3 text-muted">No se encontraron bienes con los filtros aplicados.</td></tr>';
+        return;
+      }
+      var escribe = puedeEscribir(), admin = esAdmin();
+      tbody.innerHTML = bienes.map(function (b) {
+        var cod = esc(b.CODIGO_BIEN);
+        var acc = '<button class="btn btn-sm btn-outline-secondary me-1" data-act="bien-qr" data-id="' + cod + '" title="Etiqueta QR"><i class="bi bi-qr-code"></i></button>';
+        if (b.FOTO_ID) acc += '<button class="btn btn-sm btn-outline-info me-1" data-act="bien-foto" data-id="' + cod + '" title="Ver foto"><i class="bi bi-image"></i></button>';
+        if (escribe) acc += '<button class="btn btn-sm btn-outline-primary me-1" data-act="bien-editar" data-id="' + cod + '" title="Editar"><i class="bi bi-pencil"></i></button>';
+        if (admin && String(b.CONDICION).toUpperCase() !== 'BAJA') acc += '<button class="btn btn-sm btn-outline-warning me-1" data-act="bien-baja" data-id="' + cod + '" title="Dar de baja"><i class="bi bi-arrow-down-circle"></i></button>';
+        if (admin) acc += '<button class="btn btn-sm btn-outline-danger" data-act="bien-eliminar" data-id="' + cod + '" title="Eliminar"><i class="bi bi-trash"></i></button>';
+        return '<tr>' +
+          '<td><span class="badge-custom ' + (b.TIPO_BIEN === 'BLD' ? 'badge-bld' : 'badge-bca') + '">' + esc(b.TIPO_BIEN) + '</span></td>' +
+          '<td class="fw-bold font-monospace">' + cod + '</td>' +
+          '<td>' + esc(b.BIEN) + '</td>' +
+          '<td>' + badgeCond(b.CONDICION) + '</td>' +
+          '<td>' + esc(b.CUSTODIO || 'Sin asignar') + '</td>' +
+          '<td>' + esc(b.UBICACION || 'N/A') + '</td>' +
+          '<td class="text-end">' + money(b.VALOR_CONTABLE) + '</td>' +
+          '<td class="text-center text-nowrap">' + acc + '</td></tr>';
+      }).join('');
+    }
+
+    function llenarSelectCustodiosBien(seleccionado) {
+      var sel = el('bien-custodio');
+      if (!sel) return;
+      var html = '<option value="">-- Sin asignar --</option>';
+      var hallado = false;
+      cacheCustodios.forEach(function (c) {
+        if (String(c.ESTADO).toUpperCase() === 'INACTIVO' && c.NOMBRE !== seleccionado) return;
+        if (c.NOMBRE === seleccionado) hallado = true;
+        html += '<option value="' + esc(c.NOMBRE) + '">' + esc(c.NOMBRE) + '</option>';
+      });
+      if (seleccionado && !hallado) html += '<option value="' + esc(seleccionado) + '">' + esc(seleccionado) + '</option>';
+      sel.innerHTML = html;
+      sel.value = seleccionado || '';
+    }
+
+    function abrirModalNuevoBien() {
+      asegurarCustodios().then(function () {
+        var form = el('form-bien'); if (form) form.reset();
+        setVal('bien-modo', 'CREAR');
+        el('bien-codigo').readOnly = false;
+        el('bien-tipo').disabled = false;
+        el('modal-bien-title').innerText = 'Registrar Nuevo Bien';
+        llenarSelectCustodiosBien('');
+        if (window.Mejoras) Mejoras.prepararFotoModal('');
+        modal('modal-bien').show();
+      });
+    }
+
+    function abrirModalEditarBien(codigo) {
+      var b = cacheBienes.find(function (x) { return x.CODIGO_BIEN === codigo; });
+      if (!b) { notify('Error', 'No se encontró el bien en la lista actual.', 'danger'); return; }
+      asegurarCustodios().then(function () {
+        setVal('bien-modo', 'EDITAR');
+        el('modal-bien-title').innerText = 'Editar Bien ' + codigo;
+        setVal('bien-tipo', b.TIPO_BIEN);
+        el('bien-tipo').disabled = true;
+        setVal('bien-codigo', b.CODIGO_BIEN);
+        el('bien-codigo').readOnly = true;
+        setVal('bien-condicion', b.CONDICION);
+        setVal('bien-nombre', b.BIEN);
+        setVal('bien-marca', b.MARCA);
+        setVal('bien-modelo', b.MODELO);
+        setVal('bien-serie', b.SERIE);
+        setVal('bien-color', b.COLOR);
+        setVal('bien-material', b.MATERIAL);
+        setVal('bien-dimension', b.DIMENSION);
+        llenarSelectCustodiosBien(b.CUSTODIO);
+        setVal('bien-ubicacion', b.UBICACION);
+        setVal('bien-cuenta', b.CUENTA_CONTABLE);
+        setVal('bien-vida-util', b.VIDA_UTIL);
+        setVal('bien-valor', b.VALOR_CONTABLE);
+        setVal('bien-descripcion', b.DESCRIPCION_BIEN);
+        setVal('bien-observacion', b.OBSERVACION);
+        setVal('bien-fecha-adq', String(b.FECHA_ADQUISICION || '').substring(0, 10));
+        if (window.Mejoras) Mejoras.prepararFotoModal(codigo);
+        modal('modal-bien').show();
+      });
+    }
+
+    function guardarBien() {
+      var nombre = val('bien-nombre').trim();
+      if (!nombre) { notify('Dato requerido', 'Ingrese el nombre del bien.', 'warning'); return; }
+      var modo = val('bien-modo');
+      var data = {
+        tipoBien: val('bien-tipo'), codigoBien: val('bien-codigo').trim(), condicion: val('bien-condicion'),
+        bien: nombre, marca: val('bien-marca'), modelo: val('bien-modelo'), serie: val('bien-serie'),
+        color: val('bien-color'), material: val('bien-material'), dimension: val('bien-dimension'),
+        custodio: val('bien-custodio'), ubicacion: val('bien-ubicacion'), cuentaContable: val('bien-cuenta'),
+        vidaUtil: val('bien-vida-util'), valorContable: val('bien-valor'),
+        descripcionBien: val('bien-descripcion'), observacion: val('bien-observacion'),
+        fechaAdquisicion: val('bien-fecha-adq')
+      };
+      showLoading(true, 'Guardando bien...');
+      gasRun(modo === 'CREAR' ? 'crearBien' : 'actualizarBien', currentToken, data).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); ocultarModal('modal-bien'); cargarBienes(true); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function darDeBajaBien(codigo) {
+      var motivo = prompt('Motivo de la baja del bien ' + codigo + ':');
+      if (motivo === null) return;
+      showLoading(true, 'Registrando baja...');
+      gasRun('darDeBajaBien', currentToken, codigo, motivo).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); cargarBienes(true); } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function eliminarBien(codigo) {
+      if (!confirm('¿Eliminar DEFINITIVAMENTE el bien ' + codigo + '?\nEsta acción no se puede deshacer (considere "Dar de baja").')) return;
+      showLoading(true, 'Eliminando...');
+      gasRun('eliminarBien', currentToken, codigo).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); cargarBienes(true); } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // Etiqueta QR (usa la librería qrcodejs cargada en index.html)
+    function mostrarQR(codigo) {
+      var b = cacheBienes.find(function (x) { return x.CODIGO_BIEN === codigo; });
+      if (!b) return;
+      var box = el('qr-canvas-box');
+      box.innerHTML = '';
+      if (window.QRCode) {
+        new QRCode(box, { text: String(b.CODIGO_BIEN), width: 170, height: 170, correctLevel: QRCode.CorrectLevel.M });
+      } else {
+        box.innerHTML = '<div class="text-danger small">No se pudo cargar la librería de códigos QR.</div>';
+      }
+      el('qr-modal-codigo').innerText = b.CODIGO_BIEN;
+      el('qr-modal-bien').innerText = b.BIEN || '';
+      el('qr-modal-custodio').innerText = 'Custodio: ' + (b.CUSTODIO || 'Sin asignar');
+      el('qr-modal-ubicacion').innerText = 'Ubicación: ' + (b.UBICACION || 'N/A');
+      modal('modal-qr-preview').show();
+    }
+
+    function imprimirEtiquetaQR() {
+      document.body.classList.add('printing-qr');
+      window.print();
+      setTimeout(function () { document.body.classList.remove('printing-qr'); }, 1500);
+    }
+
+    function quitarInterno(rows) {
+      return rows.map(function (r) { var c = {}; Object.keys(r).forEach(function (k) { if (k !== '_rowIndex') c[k] = r[k]; }); return c; });
+    }
+
+    // ---------------------------------------------------------------- Reportes (Excel / PDF)
+    var REPORTES = {
+      bienes: {
+        funcion: 'generarReporteBienes', hoja: 'Bienes', archivo: 'Reporte_Bienes',
+        titulo: 'Reporte de Bienes Muebles e Inmuebles',
+        columnas: [['CODIGO_BIEN', 'Código'], ['TIPO_BIEN', 'Tipo'], ['BIEN', 'Bien'], ['SERIE', 'Serie'], ['MARCA', 'Marca'],
+                   ['CONDICION', 'Condición'], ['CUSTODIO', 'Custodio'], ['UBICACION', 'Ubicación'], ['VALOR_CONTABLE', 'Valor ($)']],
+        filtros: function () {
+          return { tipo: val('rep-bien-tipo'), condicion: val('rep-bien-condicion'), custodio: val('rep-bien-custodio') };
+        }
+      },
+      existencias: {
+        funcion: 'generarReporteExistencias', hoja: 'Existencias', archivo: 'Reporte_Existencias',
+        titulo: 'Reporte de Existencias y Suministros',
+        columnas: [['ID_EXISTENCIA', 'ID'], ['CODIGO', 'Código'], ['DESCRIPCION', 'Descripción'], ['CANTIDAD', 'Stock'],
+                   ['STOCK_MINIMO', 'Mínimo'], ['ALERTA', 'Alerta'], ['ESTADO', 'Estado'], ['OBSERVACION', 'Observación']],
+        filtros: function () {
+          return { estado: val('rep-ex-estado'), soloBajoStock: !!(el('rep-ex-bajo') && el('rep-ex-bajo').checked) };
+        }
+      },
+      depreciacion: {
+        funcion: 'generarReporteDepreciacion', hoja: 'Depreciacion', archivo: 'Reporte_Depreciacion',
+        titulo: 'Reporte de Depreciación de Bienes',
+        columnas: [['CODIGO_BIEN', 'Código'], ['BIEN', 'Bien'], ['CUSTODIO', 'Custodio'], ['FECHA_BASE', 'Fecha base'],
+                   ['VIDA_UTIL', 'Vida (años)'], ['VALOR_CONTABLE', 'Valor ($)'], ['VALOR_RESIDUAL', 'Residual ($)'],
+                   ['MESES_TRANSCURRIDOS', 'Meses'], ['DEPRECIACION_ACUMULADA', 'Deprec. acum. ($)'],
+                   ['VALOR_EN_LIBROS', 'Valor en libros ($)'], ['ESTADO_DEP', 'Estado']],
+        monedas: ['VALOR_CONTABLE', 'VALOR_RESIDUAL', 'DEPRECIACION_ACUMULADA', 'VALOR_EN_LIBROS'],
+        filtros: function () {
+          return { tipo: val('rep-dep-tipo') || 'BLD', custodio: val('rep-dep-custodio') || 'TODOS', incluirBajas: !!(el('rep-dep-bajas') && el('rep-dep-bajas').checked) };
+        }
+      },
+      movimientos: {
+        funcion: 'generarReporteMovimientos', hoja: 'Kardex', archivo: 'Reporte_Kardex',
+        titulo: 'Kardex de Existencias',
+        columnas: [['ID_MOVIMIENTO', 'ID'], ['FECHA', 'Fecha'], ['TIPO_MOVIMIENTO', 'Tipo'], ['CODIGO', 'Código'], ['DESCRIPCION', 'Descripción'],
+                   ['INGRESO', 'Entrada'], ['SALIDA', 'Salida'], ['SALDO', 'Saldo'], ['RESPONSABLE', 'Responsable']],
+        filtros: function () {
+          return { fechaInicio: val('rep-mov-desde'), fechaFin: val('rep-mov-hasta'), tipoMovimiento: val('rep-mov-tipo') };
+        }
+      }
+    };
+
+    function exportarReporte(clave, formato) {
+      var def = REPORTES[clave];
+      if (!def) return;
+      showLoading(true, 'Generando reporte...');
+      gasRun(def.funcion, currentToken, def.filtros()).then(function (res) {
+        showLoading(false);
+        if (!ok(res)) { fail(res); return; }
+        var filas = quitarInterno(res.data || []);
+        if (!filas.length) { notify('Sin datos', 'No hay registros con los filtros elegidos.', 'warning'); return; }
+        var nombre = def.archivo + '_' + new Date().toISOString().slice(0, 10);
+
+        if (formato === 'excel') {
+          if (!window.XLSX) { notify('Error', 'La librería de Excel no se cargó.', 'danger'); return; }
+          var ws = XLSX.utils.json_to_sheet(filas);
+          var wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, def.hoja);
+          XLSX.writeFile(wb, nombre + '.xlsx');
+        } else {
+          generarPDF(def, filas, res, nombre);
+        }
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function generarPDF(def, filas, res, nombre) {
+      if (!window.jspdf || !window.jspdf.jsPDF) { notify('Error', 'La librería PDF no se cargó. Verifique su conexión.', 'danger'); return; }
+      var doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+      var ancho = doc.internal.pageSize.getWidth();
+
+      doc.setFontSize(14); doc.setFont('helvetica', 'bold');
+      doc.text(res.titulo || def.titulo, 40, 40);
+      doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+      var resumen = 'Generado: ' + (res.fechaGeneracion || '') + '  |  Por: ' + ((currentUser && currentUser.nombre) || '') + '  |  Registros: ' + filas.length;
+      if (res.valorTotal !== undefined) resumen += '  |  Valor total: ' + money(res.valorTotal);
+      if (res.stockTotal !== undefined) resumen += '  |  Stock total: ' + res.stockTotal;
+      if (res.totales && res.totales.libros !== undefined) {
+        resumen += '  |  Valor: ' + money(res.totales.valor) + '  |  Deprec. acum.: ' + money(res.totales.acumulada) + '  |  En libros: ' + money(res.totales.libros) + '  |  Residual: ' + res.residualPorcentaje + '%';
+      }
+      if (res.totalEntradas !== undefined) resumen += '  |  Entradas: ' + res.totalEntradas + '  |  Salidas: ' + res.totalSalidas;
+      doc.text(resumen, 40, 58);
+
+      doc.autoTable({
+        startY: 72,
+        head: [def.columnas.map(function (c) { return c[1]; })],
+        body: filas.map(function (r) {
+          return def.columnas.map(function (c) {
+            var v = r[c[0]];
+            if ((def.monedas || ['VALOR_CONTABLE']).indexOf(c[0]) !== -1) return money(v);
+            return v === undefined || v === null ? '' : String(v);
+          });
+        }),
+        styles: { fontSize: 7.5, cellPadding: 3 },
+        headStyles: { fillColor: [30, 58, 138] },
+        didDrawPage: function (d) {
+          doc.setFontSize(8);
+          doc.text('Página ' + doc.internal.getNumberOfPages(), ancho - 80, doc.internal.pageSize.getHeight() - 20);
+        }
+      });
+      doc.save(nombre + '.pdf');
+    }
+
+    function exportarReporteBienesExcel() { exportarReporte('bienes', 'excel'); }
+    function exportarReporteExistenciasExcel() { exportarReporte('existencias', 'excel'); }
+
+    // Rellena los filtros del centro de reportes (custodios)
+    function prepararReportes() {
+      asegurarCustodios().then(function () {
+        poblarSelect('rep-bien-custodio', cacheCustodios, function (c) { return c.NOMBRE; }, function (c) { return c.NOMBRE; }, 'Todos los custodios');
+        poblarSelect('rep-dep-custodio', cacheCustodios, function (c) { return c.NOMBRE; }, function (c) { return c.NOMBRE; }, 'Todos');
+      });
+    }
+
+
+    // ---------------------------------------------------------------- Stock mínimo de un producto existente
+    function cambiarStockMinimo(codigo) {
+      var prod = null;
+      var filas = document.querySelectorAll('#tbody-existencias tr');
+      var actual = '';
+      filas.forEach(function (tr) {
+        var celdas = tr.querySelectorAll('td');
+        if (celdas.length > 4 && celdas[1].innerText.trim() === codigo) actual = celdas[4].innerText.trim();
+      });
+      var r = prompt('Nuevo stock mínimo para ' + codigo + ' (actual: ' + (actual || '?') + '):', actual);
+      if (r === null) return;
+      if (r.trim() === '' || isNaN(parseFloat(r)) || parseFloat(r) < 0) { notify('Valor inválido', 'Ingrese un número mayor o igual a cero.', 'warning'); return; }
+      showLoading(true, 'Actualizando stock mínimo...');
+      gasRun('actualizarStockMinimo', currentToken, codigo, r).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); cacheExistencias = []; cargarExistencias(true); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Historial de constataciones
+    function setHistorialTipo(tipo) {
+      historialTipo = tipo;
+      el('hist-tab-bienes').classList.toggle('active', tipo === 'BIENES');
+      el('hist-tab-existencias').classList.toggle('active', tipo === 'EXISTENCIAS');
+      cargarHistorial();
+    }
+
+    function filtrarHistorial() { debounce('hist', function () { cargarHistorial(true); }); }
+
+    function cargarHistorial(silencioso) {
+      if (!silencioso) showLoading(true, 'Cargando historial...');
+      var filtros = { busqueda: val('filter-hist-busqueda'), soloDiferencias: !!(el('filter-hist-novedades') && el('filter-hist-novedades').checked) };
+      gasRun('listarConstataciones', currentToken, historialTipo, filtros).then(function (res) {
+        showLoading(false);
+        if (!ok(res)) { if (res) fail(res); return; }
+        var thead = el('thead-historial'), tbody = el('tbody-historial');
+        var data = res.data || [];
+        if (historialTipo === 'BIENES') {
+          thead.innerHTML = '<tr><th>Fecha</th><th>Código</th><th>Bien</th><th>Custodio</th><th>Ubicación</th><th>Cond. Sistema</th><th>Cond. Física</th><th>Novedad</th><th>Usuario</th></tr>';
+          tbody.innerHTML = data.length ? data.map(function (r) {
+            var dif = String(r.CONDICION_SISTEMA).toUpperCase() !== String(r.CONDICION_FISICA).toUpperCase();
+            return '<tr><td class="text-nowrap small">' + esc(r.FECHA) + '</td><td class="font-monospace fw-bold">' + esc(r.CODIGO_BIEN) + '</td><td>' + esc(r.BIEN) + '</td>' +
+              '<td>' + esc(r.CUSTODIO) + '</td><td>' + esc(r.UBICACION) + '</td><td>' + badgeCond(r.CONDICION_SISTEMA) + '</td>' +
+              '<td>' + badgeCond(r.CONDICION_FISICA) + (dif ? ' <i class="bi bi-exclamation-circle-fill text-warning" title="Difiere del sistema"></i>' : '') + '</td>' +
+              '<td class="small">' + esc(r.NOVEDAD) + '</td><td class="small">' + esc(r.USUARIO) + '</td></tr>';
+          }).join('') : '<tr><td colspan="9" class="text-center py-4 text-muted">Sin constataciones registradas.</td></tr>';
+        } else {
+          thead.innerHTML = '<tr><th>Fecha</th><th>Código</th><th>Descripción</th><th class="text-center">Sistema</th><th class="text-center">Físico</th><th class="text-center">Diferencia</th><th>Estado</th><th>Observación</th><th>Usuario</th></tr>';
+          tbody.innerHTML = data.length ? data.map(function (r) {
+            var d = parseFloat(r.DIFERENCIA) || 0;
+            var cls = d === 0 ? '' : (d < 0 ? 'text-danger' : 'text-warning');
+            return '<tr><td class="text-nowrap small">' + esc(r.FECHA) + '</td><td class="font-monospace fw-bold">' + esc(r.CODIGO) + '</td><td>' + esc(r.DESCRIPCION) + '</td>' +
+              '<td class="text-center">' + esc(r.STOCK_SISTEMA) + '</td><td class="text-center">' + esc(r.STOCK_FISICO) + '</td>' +
+              '<td class="text-center fw-bold ' + cls + '">' + (d > 0 ? '+' : '') + d + '</td><td>' + badgeCond(r.ESTADO) + '</td>' +
+              '<td class="small">' + esc(r.OBSERVACION) + '</td><td class="small">' + esc(r.USUARIO) + '</td></tr>';
+          }).join('') : '<tr><td colspan="9" class="text-center py-4 text-muted">Sin constataciones registradas.</td></tr>';
+        }
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Acta de bienes en PDF
+    function descargarActaPDF() {
+      if (!actaActual) { notify('Sin datos', 'Abra primero el acta de un custodio.', 'warning'); return; }
+      if (!window.jspdf || !window.jspdf.jsPDF) { notify('Error', 'La librería PDF no se cargó. Verifique su conexión.', 'danger'); return; }
+      var c = actaActual.custodio, bienes = actaActual.bienes;
+      var doc = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      var ancho = doc.internal.pageSize.getWidth();
+      var alto = doc.internal.pageSize.getHeight();
+      var total = bienes.reduce(function (a, b) { return a + (parseFloat(b.VALOR_CONTABLE) || 0); }, 0);
+
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+      doc.text('ACTA DE BIENES ASIGNADOS', ancho / 2, 50, { align: 'center' });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+      doc.text('Custodio: ' + (c.NOMBRE || '') + '      C.I.: ' + (c.CEDULA || ''), 40, 80);
+      doc.text('Cargo: ' + (c.CARGO || '') + '      Departamento: ' + (c.DEPARTAMENTO || ''), 40, 96);
+      doc.text('Fecha de emisión: ' + new Date().toLocaleString(), 40, 112);
+
+      doc.autoTable({
+        startY: 128,
+        head: [['#', 'Código', 'Bien', 'Serie', 'Condición', 'Valor ($)']],
+        body: bienes.map(function (b, i) { return [i + 1, b.CODIGO_BIEN, b.BIEN, b.SERIE, b.CONDICION, money(b.VALOR_CONTABLE)]; }),
+        foot: [['', '', '', '', 'Total', money(total)]],
+        styles: { fontSize: 8.5, cellPadding: 4 },
+        headStyles: { fillColor: [30, 58, 138] },
+        footStyles: { fillColor: [241, 245, 249], textColor: 20, fontStyle: 'bold' },
+        columnStyles: { 5: { halign: 'right' } }
+      });
+
+      var y = doc.lastAutoTable.finalY + 90;
+      if (y > alto - 100) { doc.addPage(); y = 120; }
+      doc.setFontSize(10);
+      doc.line(70, y, 240, y); doc.line(ancho - 240, y, ancho - 70, y);
+      doc.text('Entrega (Administrador de Bienes)', 155, y + 14, { align: 'center' });
+      doc.text('Recibe (Custodio)', ancho - 155, y + 14, { align: 'center' });
+      doc.setFontSize(8);
+      doc.text(c.NOMBRE || '', ancho - 155, y + 28, { align: 'center' });
+
+      doc.save('Acta_' + String(c.NOMBRE || 'custodio').replace(/[^A-Za-z0-9]+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.pdf');
+    }
+
+    // ---------------------------------------------------------------- Cambio de contraseña propia
+    function abrirModalPassword() {
+      var f = el('form-password'); if (f) f.reset();
+      modal('modal-password').show();
+    }
+
+    function guardarPassword() {
+      var actual = val('pwd-actual'), nueva = val('pwd-nueva'), repetir = val('pwd-repetir');
+      if (!actual || !nueva || !repetir) { notify('Datos requeridos', 'Complete los tres campos.', 'warning'); return; }
+      if (nueva !== repetir) { notify('No coinciden', 'La nueva contraseña y su repetición son distintas.', 'warning'); return; }
+      showLoading(true, 'Actualizando contraseña...');
+      gasRun('cambiarMiPassword', currentToken, actual, nueva).then(function (res) {
+        showLoading(false);
+        if (ok(res)) {
+          ocultarModal('modal-password');
+          alert(res.message);
+          limpiarSesionLocal();
+          mostrarPantallaLogin('Contraseña actualizada. Ingrese con la nueva.');
+        } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Custodios
+    function filtrarCustodios() { debounce('cust', function () { renderTablaCustodios(); }, 200); }
+
+    function cargarCustodios() {
+      showLoading(true, 'Cargando custodios...');
+      return asegurarCustodios(true).then(function () { showLoading(false); renderTablaCustodios(); })
+        .catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function renderTablaCustodios() {
+      var tbody = el('tbody-custodios');
+      if (!tbody) return;
+      var q = val('filter-custodio-busqueda').toLowerCase().trim();
+      var lista = cacheCustodios.filter(function (c) {
+        return !q || [c.CEDULA, c.NOMBRE, c.DEPARTAMENTO, c.CARGO].join(' ').toLowerCase().indexOf(q) !== -1;
+      });
+      if (!lista.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-3 text-muted">No existen custodios que coincidan.</td></tr>';
+        return;
+      }
+      var escribe = puedeEscribir(), admin = esAdmin();
+      tbody.innerHTML = lista.map(function (c) {
+        var id = esc(c.ID_CUSTODIO);
+        var estado = String(c.ESTADO || '').toUpperCase() === 'ACTIVO' ? 'badge-activo' : 'badge-inactivo';
+        var acc = '<button class="btn btn-sm btn-outline-secondary me-1" data-act="cust-acta" data-id="' + id + '" title="Acta de bienes"><i class="bi bi-file-earmark-text"></i></button>';
+        if (escribe) acc += '<button class="btn btn-sm btn-outline-primary me-1" data-act="cust-editar" data-id="' + id + '" title="Editar"><i class="bi bi-pencil"></i></button>';
+        if (admin) acc += '<button class="btn btn-sm btn-outline-danger" data-act="cust-eliminar" data-id="' + id + '" title="Eliminar"><i class="bi bi-trash"></i></button>';
+        return '<tr><td>' + id + '</td><td>' + esc(c.CEDULA) + '</td><td class="fw-bold">' + esc(c.NOMBRE) + '</td>' +
+          '<td>' + esc(c.CARGO) + '</td><td>' + esc(c.DEPARTAMENTO) + '</td>' +
+          '<td class="text-center">' + (c.totalBienesAsignados || 0) + '</td>' +
+          '<td class="text-center"><span class="badge-custom ' + estado + '">' + esc(c.ESTADO) + '</span></td>' +
+          '<td class="text-center text-nowrap">' + acc + '</td></tr>';
+      }).join('');
+    }
+
+    function abrirModalNuevoCustodio() {
+      var f = el('form-custodio'); if (f) f.reset();
+      setVal('custodio-id', '');
+      modal('modal-custodio').show();
+    }
+
+    function abrirModalEditarCustodio(id) {
+      var c = cacheCustodios.find(function (x) { return x.ID_CUSTODIO === id; });
+      if (!c) return;
+      setVal('custodio-id', c.ID_CUSTODIO);
+      setVal('custodio-cedula', c.CEDULA);
+      setVal('custodio-nombre', c.NOMBRE);
+      setVal('custodio-cargo', c.CARGO);
+      setVal('custodio-depto', c.DEPARTAMENTO);
+      setVal('custodio-ubicacion', c.UBICACION);
+      setVal('custodio-estado', String(c.ESTADO || 'ACTIVO').toUpperCase());
+      modal('modal-custodio').show();
+    }
+
+    function guardarCustodio() {
+      var id = val('custodio-id');
+      var data = {
+        idCustodio: id, cedula: val('custodio-cedula').trim(), nombre: val('custodio-nombre').trim(),
+        cargo: val('custodio-cargo'), departamento: val('custodio-depto'),
+        ubicacion: val('custodio-ubicacion'), estado: val('custodio-estado')
+      };
+      if (!data.cedula || !data.nombre) { notify('Datos requeridos', 'Cédula y nombre son obligatorios.', 'warning'); return; }
+      showLoading(true, 'Guardando custodio...');
+      gasRun(id ? 'actualizarCustodio' : 'crearCustodio', currentToken, data).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); ocultarModal('modal-custodio'); cargarCustodios(); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function eliminarCustodio(id) {
+      if (!confirm('¿Eliminar al custodio ' + id + '?')) return;
+      showLoading(true, 'Eliminando custodio...');
+      gasRun('eliminarCustodio', currentToken, id).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); cargarCustodios(); } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function verActaCustodio(id) {
+      var c = cacheCustodios.find(function (x) { return x.ID_CUSTODIO === id; });
+      if (!c) return;
+      showLoading(true, 'Generando acta...');
+      gasRun('obtenerBienesPorCustodio', currentToken, c.NOMBRE).then(function (res) {
+        showLoading(false);
+        if (!ok(res)) { fail(res); return; }
+        var activos = (res.data || []).filter(function (b) { return String(b.CONDICION).toUpperCase() !== 'BAJA'; });
+        actaActual = { custodio: c, bienes: activos };
+        var total = activos.reduce(function (a, b) { return a + (parseFloat(b.VALOR_CONTABLE) || 0); }, 0);
+        var filas = activos.map(function (b, i) {
+          return '<tr><td>' + (i + 1) + '</td><td class="font-monospace">' + esc(b.CODIGO_BIEN) + '</td><td>' + esc(b.BIEN) + '</td><td>' + esc(b.SERIE) + '</td><td>' + esc(b.CONDICION) + '</td><td class="text-end">' + money(b.VALOR_CONTABLE) + '</td></tr>';
+        }).join('') || '<tr><td colspan="6" class="text-center text-muted">Sin bienes activos asignados.</td></tr>';
+        el('modal-custodio-bienes-body').innerHTML =
+          '<h6 class="fw-bold mb-1">ACTA DE BIENES ASIGNADOS</h6>' +
+          '<p class="small mb-2"><strong>Custodio:</strong> ' + esc(c.NOMBRE) + ' &nbsp;|&nbsp; <strong>C.I.:</strong> ' + esc(c.CEDULA) +
+          '<br><strong>Cargo:</strong> ' + esc(c.CARGO) + ' &nbsp;|&nbsp; <strong>Departamento:</strong> ' + esc(c.DEPARTAMENTO) +
+          '<br><strong>Fecha:</strong> ' + esc(new Date().toLocaleString()) + '</p>' +
+          '<div class="table-responsive"><table class="table table-sm table-bordered"><thead class="table-light"><tr><th>#</th><th>Código</th><th>Bien</th><th>Serie</th><th>Condición</th><th class="text-end">Valor</th></tr></thead><tbody>' + filas +
+          '</tbody><tfoot><tr><th colspan="5" class="text-end">Total</th><th class="text-end">' + money(total) + '</th></tr></tfoot></table></div>' +
+          '<div class="row text-center mt-5 pt-4 small"><div class="col-6"><hr class="mx-4"><strong>Entrega (Administrador de Bienes)</strong></div><div class="col-6"><hr class="mx-4"><strong>Recibe (Custodio)</strong></div></div>';
+        modal('modal-custodio-bienes').show();
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function imprimirActa() {
+      document.body.classList.add('printing-acta');
+      window.print();
+      setTimeout(function () { document.body.classList.remove('printing-acta'); }, 1500);
+    }
+
+    // ---------------------------------------------------------------- Existencias
+    function filtrarExistencias() { debounce('ex', function () { cargarExistencias(true); }); }
+
+    function cargarExistencias(silencioso) {
+      if (!silencioso) showLoading(true, 'Cargando existencias...');
+      var filtros = {
+        busqueda: val('filter-ex-busqueda'),
+        estado: val('filter-ex-estado') || 'TODOS',
+        soloBajoStock: !!(el('filter-ex-bajo-stock') && el('filter-ex-bajo-stock').checked)
+      };
+      return gasRun('listarExistencias', currentToken, filtros).then(function (res) {
+        showLoading(false);
+        if (!ok(res)) { if (res) fail(res); return; }
+        renderTablaExistencias(res.data || []);
+        // La caché sin filtros se usa para los selectores de movimientos
+        if (!filtros.busqueda && filtros.estado === 'TODOS' && !filtros.soloBajoStock) cacheExistencias = res.data || [];
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function renderTablaExistencias(items) {
+      var tbody = el('tbody-existencias');
+      if (!tbody) return;
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center py-3 text-muted">No hay suministros que coincidan.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = items.map(function (e) {
+        var cls = e.esCritico ? 'text-danger' : (e.esBajoStock ? 'text-warning' : '');
+        var alerta = e.esCritico ? ' <i class="bi bi-exclamation-triangle-fill text-danger" title="Stock crítico"></i>' : (e.esBajoStock ? ' <i class="bi bi-exclamation-circle text-warning" title="Bajo stock mínimo"></i>' : '');
+        return '<tr><td>' + esc(e.ID_EXISTENCIA) + '</td><td class="fw-bold font-monospace">' + esc(e.CODIGO) + '</td><td>' + esc(e.DESCRIPCION) + '</td>' +
+          '<td class="fw-bold text-center ' + cls + '">' + esc(e.CANTIDAD) + alerta + '</td>' +
+          '<td class="text-center text-muted">' + esc(e.STOCK_MINIMO) + '</td>' +
+          '<td class="text-center">' + badgeCond(e.ESTADO) + '</td><td>' + esc(e.OBSERVACION) + '</td>' +
+          '<td class="text-center text-nowrap"><button class="btn btn-sm btn-outline-primary me-1" data-act="ex-kardex" data-id="' + esc(e.CODIGO) + '" title="Ver Kardex"><i class="bi bi-journal-text"></i></button>' +
+          (puedeEscribir() ? '<button class="btn btn-sm btn-outline-secondary" data-act="ex-minimo" data-id="' + esc(e.CODIGO) + '" title="Cambiar stock mínimo"><i class="bi bi-sliders"></i></button>' : '') + '</td></tr>';
+      }).join('');
+    }
+
+    function abrirModalNuevaExistencia() {
+      var f = el('form-existencia'); if (f) f.reset();
+      setVal('ex-stock-minimo', 15);
+      modal('modal-existencia').show();
+    }
+
+    function guardarExistencia() {
+      var data = {
+        codigo: val('ex-codigo').trim(), descripcion: val('ex-descripcion').trim(), cuentaContable: val('ex-cuenta'),
+        cantidad: val('ex-cantidad-inicial'), estado: val('ex-estado'), observacion: val('ex-observacion'),
+        stockMinimo: val('ex-stock-minimo')
+      };
+      if (!data.codigo || !data.descripcion) { notify('Datos requeridos', 'Código y descripción son obligatorios.', 'warning'); return; }
+      showLoading(true, 'Guardando suministro...');
+      gasRun('crearExistencia', currentToken, data).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); ocultarModal('modal-existencia'); cacheExistencias = []; cargarExistencias(true); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function verKardex(codigo) {
+      navTo('movimientos');
+      setTimeout(function () { setVal('filter-mov-codigo', codigo); cargarMovimientos(true); }, 400);
+    }
+
+    // ---------------------------------------------------------------- Kardex
+    function filtrarMovimientos() { debounce('mov', function () { cargarMovimientos(true); }); }
+
+    function cargarMovimientos(silencioso) {
+      if (!silencioso) showLoading(true, 'Cargando movimientos...');
+      return asegurarExistencias().then(function () {
+        poblarSelect('filter-mov-codigo', cacheExistencias, function (e) { return e.CODIGO; }, function (e) { return e.CODIGO + ' - ' + e.DESCRIPCION; }, 'Todos los productos');
+        var filtros = {
+          busqueda: val('filter-mov-busqueda'),
+          codigo: val('filter-mov-codigo') || 'TODOS',
+          tipoMovimiento: val('filter-mov-tipo') || 'TODOS'
+        };
+        return gasRun('listarMovimientos', currentToken, filtros);
+      }).then(function (res) {
+        showLoading(false);
+        var tbody = el('tbody-movimientos');
+        if (!ok(res)) { if (res) fail(res); return; }
+        var data = res.data || [];
+        tbody.innerHTML = data.length ? data.map(function (m) {
+          return '<tr><td class="font-monospace">' + esc(m.ID_MOVIMIENTO) + '</td><td class="text-nowrap">' + esc(m.FECHA) + '</td><td>' + esc(m.TIPO_MOVIMIENTO) + '</td>' +
+            '<td class="font-monospace">' + esc(m.CODIGO) + '</td><td>' + esc(m.DESCRIPCION) + '</td>' +
+            '<td class="text-center text-success fw-bold">' + (m.INGRESO || '') + '</td><td class="text-center text-danger fw-bold">' + (m.SALIDA || '') + '</td>' +
+            '<td class="text-center bg-light fw-bold">' + esc(m.SALDO) + '</td><td>' + esc(m.RESPONSABLE) + '</td></tr>';
+        }).join('') : '<tr><td colspan="9" class="text-center py-4 text-muted">No hay movimientos.</td></tr>';
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function abrirModalNuevoMovimiento() {
+      asegurarExistencias(true).then(function () {
+        var f = el('form-movimiento'); if (f) f.reset();
+        var sel = el('mov-producto-select');
+        sel.innerHTML = '<option value="">-- Seleccione Producto --</option>' + cacheExistencias.map(function (e) {
+          return '<option value="' + esc(e.CODIGO) + '">' + esc(e.CODIGO + ' - ' + e.DESCRIPCION) + '</option>';
+        }).join('');
+        el('mov-stock-actual-box').innerText = '';
+        toggleAjusteMovimiento();
+        modal('modal-movimiento').show();
+      });
+    }
+
+    function toggleAjusteMovimiento() {
+      var box = el('mov-ajuste-box');
+      if (box) box.style.display = val('mov-tipo-select') === 'AJUSTE' ? 'block' : 'none';
+    }
+
+    function actualizarInfoProductoMovimiento() {
+      var codigo = val('mov-producto-select');
+      var prod = cacheExistencias.find(function (e) { return e.CODIGO === codigo; });
+      el('mov-stock-actual-box').innerText = prod ? 'Stock actual: ' + prod.CANTIDAD : '';
+    }
+
+    function guardarMovimiento() {
+      var data = {
+        codigo: val('mov-producto-select'), tipoMovimiento: val('mov-tipo-select'), cantidad: val('mov-cantidad'),
+        responsable: val('mov-responsable'), observacion: val('mov-observacion'),
+        direccionAjuste: val('mov-ajuste-direccion') || 'POSITIVO'
+      };
+      if (!data.codigo) { notify('Dato requerido', 'Seleccione un producto.', 'warning'); return; }
+      if (!(parseFloat(data.cantidad) > 0)) { notify('Dato requerido', 'Ingrese una cantidad mayor a cero.', 'warning'); return; }
+      showLoading(true, 'Registrando movimiento...');
+      gasRun('registrarMovimiento', currentToken, data).then(function (res) {
+        showLoading(false);
+        if (ok(res)) {
+          notify('Éxito', res.message, 'success');
+          ocultarModal('modal-movimiento');
+          cacheExistencias = [];
+          cargarMovimientos(true);
+        } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Auditoría
+    function cargarAuditoria() {
+      showLoading(true, 'Cargando auditoría...');
+      gasRun('obtenerAuditoria', currentToken, { limit: 300 }).then(function (res) {
+        showLoading(false);
+        var tbody = el('tbody-auditoria');
+        if (!ok(res)) { if (res) fail(res); return; }
+        var cel = function (t) { return '<td class="small" style="max-width:260px;word-break:break-word;">' + esc(t) + '</td>'; };
+        tbody.innerHTML = (res.data || []).map(function (a) {
+          return '<tr><td class="text-nowrap small">' + esc(a.FECHA) + '</td>' + cel(a.USUARIO) + '<td><span class="badge bg-secondary">' + esc(a.ACCION) + '</span></td>' +
+            cel(a.MODULO) + cel(a.REGISTRO_AFECTADO) + cel(a.VALOR_ANTERIOR) + cel(a.VALOR_NUEVO) + '</tr>';
+        }).join('') || '<tr><td colspan="7" class="text-center py-4 text-muted">Sin registros.</td></tr>';
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Usuarios
+    function cargarUsuarios() {
+      if (!esAdmin()) return;
+      showLoading(true, 'Cargando usuarios...');
+      gasRun('listarUsuarios', currentToken).then(function (res) {
+        showLoading(false);
+        var tbody = el('tbody-usuarios');
+        if (!ok(res)) { if (res) fail(res); return; }
+        cacheUsuarios = res.data || [];
+        tbody.innerHTML = cacheUsuarios.map(function (u) {
+          var id = esc(u.id);
+          var estado = String(u.estado).toUpperCase() === 'ACTIVO' ? 'badge-activo' : 'badge-inactivo';
+          return '<tr><td>' + id + '</td><td class="fw-bold">' + esc(u.nombre) + '</td><td>' + esc(u.email) + '</td><td>' + esc(u.rol) + '</td>' +
+            '<td><span class="badge-custom ' + estado + '">' + esc(u.estado) + '</span></td><td class="small">' + esc(u.ultimoAcceso || '—') + '</td>' +
+            '<td class="text-center text-nowrap"><button class="btn btn-sm btn-outline-primary me-1" data-act="user-editar" data-id="' + id + '" title="Editar"><i class="bi bi-pencil"></i></button>' +
+            '<button class="btn btn-sm btn-outline-danger" data-act="user-eliminar" data-id="' + id + '" title="Eliminar"><i class="bi bi-trash"></i></button></td></tr>';
+        }).join('') || '<tr><td colspan="7" class="text-center py-4">No hay usuarios.</td></tr>';
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function abrirModalNuevoUsuario() {
+      var f = el('form-usuario'); if (f) f.reset();
+      setVal('usuario-id', '');
+      el('usuario-pass-help').innerText = 'Mínimo 8 caracteres, con letras y números.';
+      modal('modal-usuario').show();
+    }
+
+    function abrirModalEditarUsuario(id) {
+      var u = cacheUsuarios.find(function (x) { return x.id === id; });
+      if (!u) return;
+      setVal('usuario-id', u.id);
+      setVal('usuario-nombre', u.nombre);
+      setVal('usuario-email', u.email);
+      setVal('usuario-password', '');
+      setVal('usuario-rol', String(u.rol).toUpperCase());
+      setVal('usuario-estado', String(u.estado).toUpperCase());
+      el('usuario-pass-help').innerText = 'Deje en blanco para conservar la contraseña actual.';
+      modal('modal-usuario').show();
+    }
+
+    function guardarUsuario() {
+      var id = val('usuario-id');
+      var data = {
+        id: id, nombre: val('usuario-nombre').trim(), email: val('usuario-email').trim(),
+        password: val('usuario-password'), rol: val('usuario-rol'), estado: val('usuario-estado')
+      };
+      if (!data.nombre || !data.email || (!id && !data.password)) { notify('Datos requeridos', 'Complete nombre, correo y contraseña.', 'warning'); return; }
+      showLoading(true, 'Guardando usuario...');
+      gasRun(id ? 'actualizarUsuario' : 'crearUsuario', currentToken, data).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); ocultarModal('modal-usuario'); cargarUsuarios(); }
+        else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    function eliminarUsuario(id) {
+      if (!confirm('¿Eliminar al usuario ' + id + '?')) return;
+      showLoading(true, 'Eliminando usuario...');
+      gasRun('eliminarUsuario', currentToken, id).then(function (res) {
+        showLoading(false);
+        if (ok(res)) { notify('Éxito', res.message, 'success'); cargarUsuarios(); } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    // ---------------------------------------------------------------- Importación masiva
+    function resetImportacion(limpiarArchivo) {
+      importState = { tipo: '', filas: [] };
+      var box = el('import-preview-box'); if (box) box.style.display = 'none';
+      var tb = el('tbody-import-preview'); if (tb) tb.innerHTML = '';
+      if (limpiarArchivo) { var f = el('input-file-import'); if (f) f.value = ''; }
+    }
+
+    function normalizarClave(k) {
+      return String(k).trim().toUpperCase().replace(/\s+/g, '_').replace(/Ñ/g, 'N').replace(/[ÁÀ]/g, 'A').replace(/[ÉÈ]/g, 'E').replace(/[ÍÌ]/g, 'I').replace(/[ÓÒ]/g, 'O').replace(/[ÚÙ]/g, 'U');
+    }
+
+    function procesarArchivoImportacion(file) {
+      if (!file) return;
+      if (!window.XLSX) { notify('Error', 'La librería de Excel no se cargó. Verifique su conexión.', 'danger'); return; }
+      var tipo = val('import-modulo-select') || 'BIENES';
+      var reader = new FileReader();
+      reader.onload = function (ev) {
+        try {
+          var wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+          var ws = wb.Sheets[wb.SheetNames[0]];
+          var crudo = XLSX.utils.sheet_to_json(ws, { defval: '' });
+          var registros = crudo.map(function (r) {
+            var o = {};
+            Object.keys(r).forEach(function (k) { o[normalizarClave(k)] = typeof r[k] === 'string' ? r[k].trim() : r[k]; });
+            return o;
+          }).filter(function (o) { return Object.keys(o).some(function (k) { return String(o[k]) !== ''; }); });
+
+          if (!registros.length) { notify('Archivo vacío', 'No se encontraron filas con datos.', 'warning'); return; }
+          if (registros.length > 1500) { notify('Archivo grande', 'Importe máximo 1500 filas por lote.', 'warning'); return; }
+
+          showLoading(true, 'Validando ' + registros.length + ' filas...');
+          gasRun('validarLoteImportacion', currentToken, tipo, registros).then(function (res) {
+            showLoading(false);
+            if (!ok(res)) { fail(res); return; }
+            importState = { tipo: tipo, filas: res.filasValidas || [] };
+            renderPreviewImportacion(res, tipo);
+          }).catch(function (e) { showLoading(false); fail(null, e); });
+        } catch (e) {
+          notify('Error', 'No se pudo leer el archivo: ' + e.message, 'danger');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function renderPreviewImportacion(res, tipo) {
+      el('import-preview-box').style.display = 'block';
+      el('import-stat-total').innerText = res.totalProcesados;
+      el('import-stat-validos').innerText = res.totalValidos;
+      el('import-stat-errores').innerText = res.totalErrores;
+      el('btn-confirm-import').disabled = !res.totalValidos;
+
+      var cod = function (f) { return tipo === 'BIENES' ? (f.CODIGO_BIEN || '(auto)') : f.CODIGO; };
+      var nom = function (f) { return tipo === 'BIENES' ? f.BIEN : f.DESCRIPCION; };
+      var html = (res.filasConError || []).map(function (f) {
+        var d = f.data || {};
+        return '<tr class="table-danger"><td><span class="badge bg-danger">Fila ' + f.fila + '</span></td><td>' + esc(d.CODIGO_BIEN || d.CODIGO || '') + '</td><td>' + esc(d.BIEN || d.DESCRIPCION || '') + '</td><td class="small">' + esc((f.errores || []).join(' • ')) + '</td></tr>';
+      }).join('');
+      var validas = res.filasValidas || [];
+      html += validas.slice(0, 200).map(function (f) {
+        return '<tr><td><span class="badge bg-success">Válido</span></td><td>' + esc(cod(f)) + '</td><td>' + esc(nom(f)) + '</td><td class="small text-muted">Listo para importar</td></tr>';
+      }).join('');
+      if (validas.length > 200) html += '<tr><td colspan="4" class="text-center small text-muted">… y ' + (validas.length - 200) + ' filas válidas más.</td></tr>';
+      el('tbody-import-preview').innerHTML = html;
+    }
+
+    function confirmarImportacionMasiva() {
+      if (!importState.filas.length) { notify('Sin datos', 'No hay filas válidas para importar.', 'warning'); return; }
+      if (!confirm('Se importarán ' + importState.filas.length + ' registros a ' + importState.tipo + '. ¿Continuar?')) return;
+      showLoading(true, 'Importando registros...');
+      gasRun('ejecutarImportacionMasiva', currentToken, importState.tipo, importState.filas).then(function (res) {
+        showLoading(false);
+        if (ok(res)) {
+          notify('Importación completa', res.message, 'success');
+          resetImportacion(true);
+          cacheBienes = []; cacheExistencias = [];
+        } else if (res) fail(res);
+      }).catch(function (e) { showLoading(false); fail(null, e); });
+    }
+
+    return {
+      init: init, gasRun: gasRun, getToken: getToken, notify: notify, esc: esc, showLoading: showLoading,
+      ejecutarLogin: ejecutarLogin, logout: logout, navTo: navTo,
+      cargarDashboard: cargarDashboard,
+      cargarBienes: cargarBienes, filtrarBienes: filtrarBienes, abrirModalNuevoBien: abrirModalNuevoBien, guardarBien: guardarBien,
+      imprimirEtiquetaQR: imprimirEtiquetaQR, imprimirActa: imprimirActa, exportarReporte: exportarReporte, cargarHistorial: cargarHistorial, filtrarHistorial: filtrarHistorial, setHistorialTipo: setHistorialTipo, descargarActaPDF: descargarActaPDF, abrirModalPassword: abrirModalPassword, guardarPassword: guardarPassword, exportarReporteBienesExcel: exportarReporteBienesExcel,
+      cargarCustodios: cargarCustodios, filtrarCustodios: filtrarCustodios, abrirModalNuevoCustodio: abrirModalNuevoCustodio, guardarCustodio: guardarCustodio,
+      cargarExistencias: cargarExistencias, filtrarExistencias: filtrarExistencias, abrirModalNuevaExistencia: abrirModalNuevaExistencia,
+      guardarExistencia: guardarExistencia, exportarReporteExistenciasExcel: exportarReporteExistenciasExcel,
+      cargarMovimientos: cargarMovimientos, filtrarMovimientos: filtrarMovimientos, abrirModalNuevoMovimiento: abrirModalNuevoMovimiento,
+      actualizarInfoProductoMovimiento: actualizarInfoProductoMovimiento, toggleAjusteMovimiento: toggleAjusteMovimiento, guardarMovimiento: guardarMovimiento,
+      cargarAuditoria: cargarAuditoria,
+      cargarUsuarios: cargarUsuarios, abrirModalNuevoUsuario: abrirModalNuevoUsuario, guardarUsuario: guardarUsuario,
+      confirmarImportacionMasiva: confirmarImportacionMasiva,
+      // Utilidades compartidas con mejoras_js.html
+      getUser: function () { return currentUser; },
+      getBienes: function () { return cacheBienes; },
+      getCustodios: function () { return asegurarCustodios().then(function () { return cacheCustodios; }); },
+      recargarBienes: function () { return cargarBienes(true); },
+      puedeEscribir: puedeEscribir, esAdmin: esAdmin, money: money, badgeCond: badgeCond
+    };
+  })();
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { window.App.init(); });
+  } else {
+    window.App.init();
+  }
+</script>

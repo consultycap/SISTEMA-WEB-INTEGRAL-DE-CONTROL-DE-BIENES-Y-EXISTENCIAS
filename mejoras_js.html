@@ -1,0 +1,483 @@
+<script>
+/**
+ * Mejoras: etiquetas QR en lote, constatación por rondas, fotos de bienes,
+ * configuración / alertas por correo. Usa las utilidades públicas de App.
+ */
+window.Mejoras = (function () {
+  'use strict';
+
+  var esc = function (v) { return App.esc(v); };
+  var el = function (id) { return document.getElementById(id); };
+  var val = function (id) { var e = el(id); return e ? e.value : ''; };
+  var tk = function () { return App.getToken(); };
+  var run = function () { return App.gasRun.apply(null, arguments); };
+  var notify = function (t, m, k) { App.notify(t, m, k); };
+  var loading = function (s, m) { App.showLoading(s, m); };
+  function ok(res) { return res && res.success; }
+  function fail(res, e) { notify('Error', (res && res.message) || (e && e.message) || 'Error inesperado', 'danger'); }
+  function modal(id) { return bootstrap.Modal.getOrCreateInstance(el(id)); }
+
+  // =====================================================================
+  // 1. ETIQUETAS QR EN LOTE (PDF)
+  // =====================================================================
+  function qrDataUrl(texto) {
+    var box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:-9999px;top:0;';
+    document.body.appendChild(box);
+    try {
+      new QRCode(box, { text: String(texto), width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+      var canvas = box.querySelector('canvas');
+      return canvas ? canvas.toDataURL('image/png') : null;
+    } finally {
+      document.body.removeChild(box);
+    }
+  }
+
+  function etiquetasLote() {
+    var bienes = (App.getBienes() || []).filter(function (b) { return String(b.CONDICION).toUpperCase() !== 'BAJA'; });
+    if (!bienes.length) { notify('Sin bienes', 'No hay bienes en la tabla para generar etiquetas. Ajuste los filtros.', 'warning'); return; }
+    if (!window.QRCode || !window.jspdf || !window.jspdf.jsPDF) { notify('Error', 'Las librerías de QR o PDF no se cargaron. Verifique su conexión.', 'danger'); return; }
+    if (bienes.length > 300 && !confirm('Se generarán ' + bienes.length + ' etiquetas. Puede tardar un momento. ¿Continuar?')) return;
+    if (!confirm('Se generará un PDF con ' + bienes.length + ' etiquetas QR (los bienes que se ven en la tabla, sin los dados de baja). ¿Continuar?')) return;
+
+    loading(true, 'Generando etiquetas...');
+    setTimeout(function () {
+      try {
+        var doc = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+        var COLS = 3, FILAS = 8, MX = 28, MY = 30;
+        var W = (595.28 - MX * 2) / COLS, H = (841.89 - MY * 2) / FILAS;
+        var porPagina = COLS * FILAS;
+
+        bienes.forEach(function (b, i) {
+          if (i > 0 && i % porPagina === 0) doc.addPage();
+          var pos = i % porPagina;
+          var x = MX + (pos % COLS) * W, y = MY + Math.floor(pos / COLS) * H;
+
+          doc.setDrawColor(150); doc.setLineWidth(0.5);
+          doc.rect(x + 2, y + 2, W - 4, H - 4);
+
+          var img = qrDataUrl(b.CODIGO_BIEN);
+          var qr = H - 24;
+          if (img) doc.addImage(img, 'PNG', x + 7, y + 12, qr, qr);
+
+          var tx = x + 7 + qr + 6, tw = W - qr - 20;
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(6);
+          doc.text('CONTROL PATRIMONIAL', tx, y + 14, { maxWidth: tw });
+          doc.setFontSize(10);
+          doc.text(String(b.CODIGO_BIEN), tx, y + 28, { maxWidth: tw });
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
+          var nombre = doc.splitTextToSize(String(b.BIEN || ''), tw).slice(0, 3);
+          doc.text(nombre, tx, y + 39);
+          var yy = y + 39 + nombre.length * 8 + 2;
+          doc.setFontSize(6);
+          if (b.CUSTODIO) { doc.text(doc.splitTextToSize('Custodio: ' + b.CUSTODIO, tw).slice(0, 2), tx, yy); yy += 8 * Math.min(2, doc.splitTextToSize('Custodio: ' + b.CUSTODIO, tw).length); }
+          if (b.UBICACION && yy < y + H - 8) doc.text(doc.splitTextToSize('Ubic.: ' + b.UBICACION, tw).slice(0, 1), tx, yy);
+        });
+
+        doc.save('Etiquetas_QR_' + new Date().toISOString().slice(0, 10) + '.pdf');
+        loading(false);
+        notify('Etiquetas listas', 'Se generaron ' + bienes.length + ' etiquetas. Imprima el PDF al 100 % (sin ajustar a página).', 'success');
+      } catch (e) {
+        loading(false); fail(null, e);
+      }
+    }, 60);
+  }
+
+  // =====================================================================
+  // 2. CONSTATACIÓN POR RONDAS
+  // =====================================================================
+  var rondaActual = null; // { ronda, items }
+  var CONDICIONES = ['NUEVO', 'BUENO', 'REGULAR', 'MALO', 'DAÑADO', 'OBSOLETO'];
+
+  function cargarRondas() {
+    volverARondas(true);
+    cambiarTipoRonda();
+    run('listarRondas', tk()).then(function (res) {
+      var tb = el('tbody-rondas');
+      if (!tb) return;
+      if (!ok(res)) { fail(res); return; }
+      var data = res.data || [];
+      if (!data.length) { tb.innerHTML = '<tr><td colspan="6" class="text-center py-3 text-muted">Todavía no hay rondas. Inicie la primera arriba.</td></tr>'; return; }
+      tb.innerHTML = data.map(function (r) {
+        var abierta = String(r.ESTADO).toUpperCase() === 'ABIERTA';
+        var hechos = (r.verificados || 0) + (r.faltantes || 0);
+        return '<tr>' +
+          '<td class="fw-bold font-monospace">' + esc(r.ID_RONDA) + '</td>' +
+          '<td class="small">' + esc(String(r.FECHA_INICIO).substring(0, 16)) + '</td>' +
+          '<td><span class="small text-muted">' + esc(r.TIPO_FILTRO) + '</span><br>' + esc(r.VALOR_FILTRO) + '</td>' +
+          '<td><span class="badge ' + (abierta ? 'bg-warning text-dark' : 'bg-success') + '">' + esc(r.ESTADO) + '</span></td>' +
+          '<td class="text-center small">' + hechos + ' / ' + (r.total || 0) + (r.faltantes ? ' <span class="text-danger">(' + r.faltantes + ' faltantes)</span>' : '') + '</td>' +
+          '<td class="text-center"><button class="btn btn-sm btn-outline-primary" data-mact="ronda-abrir" data-id="' + esc(r.ID_RONDA) + '">' + (abierta ? 'Continuar' : 'Ver') + '</button></td></tr>';
+      }).join('');
+    }).catch(function (e) { fail(null, e); });
+  }
+
+  function cambiarTipoRonda() {
+    var tipo = val('ronda-tipo') || 'CUSTODIO';
+    var sel = el('ronda-valor'), lbl = el('ronda-valor-label');
+    if (!sel) return;
+    lbl.innerText = tipo === 'CUSTODIO' ? 'Custodio' : 'Ubicación';
+    sel.innerHTML = '<option value="">Cargando...</option>';
+    var p = tipo === 'CUSTODIO'
+      ? App.getCustodios().then(function (lista) {
+          return lista.filter(function (c) { return String(c.ESTADO).toUpperCase() !== 'INACTIVO'; }).map(function (c) { return c.NOMBRE; });
+        })
+      : run('listarUbicaciones', tk()).then(function (res) { if (!ok(res)) { fail(res); return []; } return res.data || []; });
+    p.then(function (valores) {
+      if (val('ronda-tipo') !== tipo) return; // el usuario cambió mientras cargaba
+      sel.innerHTML = '<option value="">-- Seleccione --</option>' + valores.map(function (v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+    }).catch(function (e) { fail(null, e); });
+  }
+
+  function crearRonda() {
+    var tipo = val('ronda-tipo'), valor = val('ronda-valor');
+    if (!valor) { notify('Dato requerido', 'Seleccione el ' + (tipo === 'CUSTODIO' ? 'custodio' : 'lugar') + '.', 'warning'); return; }
+    loading(true, 'Creando ronda...');
+    run('crearRonda', tk(), { tipo: tipo, valor: valor }).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      notify('Ronda creada', res.message, 'success');
+      abrirRonda(res.idRonda);
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function abrirRonda(id) {
+    loading(true, 'Abriendo ronda...');
+    run('obtenerRonda', tk(), id).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      rondaActual = { ronda: res.ronda, items: res.items || [] };
+      el('rondas-lista-box').style.display = 'none';
+      el('ronda-detalle-box').style.display = 'block';
+      setVal('ronda-buscar', ''); setVal('ronda-filtro-estado', 'TODOS');
+      renderRonda();
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+  function setVal(id, v) { var e = el(id); if (e) e.value = v; }
+
+  function volverARondas(sinRecargar) {
+    var d = el('ronda-detalle-box'), l = el('rondas-lista-box');
+    if (d) d.style.display = 'none';
+    if (l) l.style.display = 'block';
+    var venia = rondaActual; rondaActual = null;
+    if (!sinRecargar && venia) cargarRondas();
+  }
+
+  function conteos() {
+    var c = { total: 0, verif: 0, falt: 0, pend: 0 };
+    (rondaActual ? rondaActual.items : []).forEach(function (i) {
+      c.total++;
+      var e = String(i.ESTADO_ITEM).toUpperCase();
+      if (e === 'VERIFICADO') c.verif++; else if (e === 'FALTANTE') c.falt++; else c.pend++;
+    });
+    return c;
+  }
+
+  function renderRonda() {
+    if (!rondaActual) return;
+    var r = rondaActual.ronda, abierta = String(r.ESTADO).toUpperCase() === 'ABIERTA';
+    var c = conteos();
+    el('ronda-titulo').innerText = r.ID_RONDA + ' · ' + r.TIPO_FILTRO + ': ' + r.VALOR_FILTRO;
+    el('ronda-subtitulo').innerText = 'Iniciada ' + String(r.FECHA_INICIO).substring(0, 16) + ' por ' + (r.CREADA_POR || '') + (abierta ? '' : ' · Cerrada ' + String(r.FECHA_CIERRE).substring(0, 16));
+    var pct = c.total ? Math.round((c.verif + c.falt) * 100 / c.total) : 0;
+    el('ronda-barra').style.width = pct + '%';
+    el('ronda-resumen').innerHTML = '<b>' + pct + '%</b> revisado · <span class="text-success">' + c.verif + ' verificados</span> · <span class="text-danger">' + c.falt + ' faltantes</span> · <span class="text-muted">' + c.pend + ' pendientes</span>' +
+      (r.OBSERVACION ? '<br><i>Observación: ' + esc(r.OBSERVACION) + '</i>' : '');
+    el('btn-ronda-cerrar').style.display = abierta ? '' : 'none';
+
+    var q = val('ronda-buscar').toLowerCase().trim(), fe = val('ronda-filtro-estado');
+    var lista = rondaActual.items.filter(function (i) {
+      var e = String(i.ESTADO_ITEM).toUpperCase();
+      if (fe !== 'TODOS' && e !== fe) return false;
+      if (q && String(i.CODIGO_BIEN).toLowerCase().indexOf(q) === -1 && String(i.BIEN).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+    var tb = el('tbody-ronda-items');
+    if (!lista.length) { tb.innerHTML = '<tr><td colspan="5" class="text-center py-3 text-muted">Sin bienes con ese filtro.</td></tr>'; return; }
+    tb.innerHTML = lista.map(function (i) {
+      var e = String(i.ESTADO_ITEM).toUpperCase();
+      var cls = e === 'VERIFICADO' ? 'ronda-fila-verificado' : (e === 'FALTANTE' ? 'ronda-fila-faltante' : '');
+      var badge = e === 'VERIFICADO' ? '<span class="badge bg-success">Verificado</span>' : (e === 'FALTANTE' ? '<span class="badge bg-danger">Faltante</span>' : '<span class="badge bg-secondary">Pendiente</span>');
+      var extra = '';
+      if (e === 'VERIFICADO' && String(i.CONDICION_FISICA).toUpperCase() !== String(i.CONDICION_SISTEMA).toUpperCase()) extra += '<div class="small text-warning">Físico: ' + esc(i.CONDICION_FISICA) + '</div>';
+      if (i.NOVEDAD && e !== 'PENDIENTE' && !/^Verificado en ronda/i.test(i.NOVEDAD)) extra += '<div class="small text-muted">' + esc(i.NOVEDAD) + '</div>';
+      var cod = esc(i.CODIGO_BIEN), acc = '';
+      if (abierta) {
+        acc = '<button class="btn btn-sm btn-success me-1" data-mact="item-ok" data-id="' + cod + '" title="Conforme"><i class="bi bi-check-lg"></i></button>' +
+              '<button class="btn btn-sm btn-warning me-1" data-mact="item-novedad" data-id="' + cod + '" title="Con novedad"><i class="bi bi-exclamation-triangle"></i></button>' +
+              '<button class="btn btn-sm btn-danger me-1" data-mact="item-falta" data-id="' + cod + '" title="No encontrado"><i class="bi bi-x-lg"></i></button>' +
+              (e !== 'PENDIENTE' ? '<button class="btn btn-sm btn-outline-secondary" data-mact="item-deshacer" data-id="' + cod + '" title="Deshacer"><i class="bi bi-arrow-counterclockwise"></i></button>' : '');
+      }
+      return '<tr class="' + cls + '"><td class="fw-bold font-monospace">' + cod + '</td><td>' + esc(i.BIEN) + extra + '</td><td>' + App.badgeCond(i.CONDICION_SISTEMA) + '</td><td>' + badge + '</td><td class="text-center text-nowrap">' + acc + '</td></tr>';
+    }).join('');
+  }
+
+  function itemPorCodigo(cod) {
+    return rondaActual && rondaActual.items.find(function (i) { return String(i.CODIGO_BIEN) === String(cod); });
+  }
+
+  function marcar(cod, estado, extra) {
+    var it = itemPorCodigo(cod); if (!it) return;
+    var d = { idRonda: rondaActual.ronda.ID_RONDA, codigoBien: cod, estado: estado };
+    Object.keys(extra || {}).forEach(function (k) { d[k] = extra[k]; });
+    loading(true, 'Guardando...');
+    run('marcarItemRonda', tk(), d).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      it.ESTADO_ITEM = estado;
+      if (estado === 'PENDIENTE') { it.CONDICION_FISICA = ''; it.NOVEDAD = ''; }
+      else {
+        it.CONDICION_FISICA = estado === 'VERIFICADO' ? (d.condicionFisica || it.CONDICION_SISTEMA) : '';
+        it.NOVEDAD = d.novedad || '';
+        if (estado === 'VERIFICADO' && d.actualizarCondicion && d.condicionFisica) it.CONDICION_SISTEMA = d.condicionFisica;
+      }
+      renderRonda();
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function ensureModalItem() {
+    if (el('modal-ronda-item')) return;
+    document.body.insertAdjacentHTML('beforeend',
+      '<div class="modal fade" id="modal-ronda-item" tabindex="-1" aria-hidden="true"><div class="modal-dialog modal-dialog-centered"><div class="modal-content">' +
+      '<div class="modal-header"><h5 class="modal-title fw-bold" id="ri-title">Novedad</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>' +
+      '<div class="modal-body"><input type="hidden" id="ri-codigo">' +
+      '<div class="small text-muted mb-2" id="ri-bien"></div>' +
+      '<label class="form-label small fw-bold">Condición física encontrada</label>' +
+      '<select id="ri-condicion" class="form-select form-select-sm mb-2">' + CONDICIONES.map(function (c) { return '<option>' + c + '</option>'; }).join('') + '</select>' +
+      '<label class="form-label small fw-bold">Novedad / observación</label>' +
+      '<textarea id="ri-novedad" class="form-control form-control-sm mb-2" rows="2" placeholder="Ej: pantalla rayada, cambió de oficina..."></textarea>' +
+      '<div class="form-check"><input class="form-check-input" type="checkbox" id="ri-actualizar"><label class="form-check-label small" for="ri-actualizar">Actualizar también la condición en el inventario</label></div>' +
+      '</div><div class="modal-footer"><button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>' +
+      '<button class="btn btn-primary-custom btn-sm" onclick="Mejoras.guardarNovedad()">Guardar</button></div></div></div></div>');
+  }
+
+  function abrirNovedad(cod) {
+    var it = itemPorCodigo(cod); if (!it) return;
+    ensureModalItem();
+    setVal('ri-codigo', cod);
+    el('ri-bien').innerText = cod + ' · ' + it.BIEN;
+    var sel = el('ri-condicion');
+    if (CONDICIONES.indexOf(String(it.CONDICION_SISTEMA).toUpperCase()) === -1) sel.insertAdjacentHTML('afterbegin', '<option>' + esc(String(it.CONDICION_SISTEMA).toUpperCase()) + '</option>');
+    sel.value = String(it.CONDICION_SISTEMA).toUpperCase();
+    setVal('ri-novedad', ''); el('ri-actualizar').checked = false;
+    modal('modal-ronda-item').show();
+  }
+
+  function guardarNovedad() {
+    var cod = val('ri-codigo'), nov = val('ri-novedad').trim();
+    var cond = val('ri-condicion');
+    var it = itemPorCodigo(cod);
+    var cambio = it && cond !== String(it.CONDICION_SISTEMA).toUpperCase();
+    if (!nov && !cambio) { notify('Dato requerido', 'Indique la novedad o cambie la condición física.', 'warning'); return; }
+    var act = el('ri-actualizar').checked;
+    bootstrap.Modal.getInstance(el('modal-ronda-item')).hide();
+    marcar(cod, 'VERIFICADO', { condicionFisica: cond, novedad: nov, actualizarCondicion: act });
+  }
+
+  function cerrarRonda() {
+    if (!rondaActual) return;
+    var c = conteos();
+    var obs = prompt('Observación final de la ronda (opcional):', '');
+    if (obs === null) return;
+    var id = rondaActual.ronda.ID_RONDA;
+    function enviar(forzar) {
+      loading(true, 'Cerrando ronda...');
+      run('cerrarRonda', tk(), id, obs, forzar).then(function (res) {
+        loading(false);
+        if (ok(res)) { notify('Ronda cerrada', res.message, 'success'); abrirRonda(id); return; }
+        if (res && res.codigo === 'PENDIENTES') {
+          if (confirm(res.message)) enviar(true);
+          return;
+        }
+        fail(res);
+      }).catch(function (e) { loading(false); fail(null, e); });
+    }
+    enviar(false);
+  }
+
+  function pdfRonda() {
+    if (!rondaActual) return;
+    if (!window.jspdf || !window.jspdf.jsPDF) { notify('Error', 'La librería PDF no se cargó.', 'danger'); return; }
+    var r = rondaActual.ronda, c = conteos();
+    var doc = new window.jspdf.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+    doc.text('Acta de Constatación Física - Ronda ' + r.ID_RONDA, 40, 40);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    doc.text(r.TIPO_FILTRO + ': ' + r.VALOR_FILTRO + '  |  Estado: ' + r.ESTADO + '  |  Inicio: ' + String(r.FECHA_INICIO).substring(0, 16) +
+      '  |  Verificados: ' + c.verif + '  Faltantes: ' + c.falt + '  Pendientes: ' + c.pend, 40, 58);
+    if (r.OBSERVACION) doc.text('Observación: ' + r.OBSERVACION, 40, 72);
+    doc.autoTable({
+      startY: r.OBSERVACION ? 84 : 72,
+      head: [['Código', 'Bien', 'Cond. sistema', 'Estado', 'Cond. física', 'Novedad', 'Fecha']],
+      body: rondaActual.items.map(function (i) {
+        return [i.CODIGO_BIEN, i.BIEN, i.CONDICION_SISTEMA, i.ESTADO_ITEM, i.CONDICION_FISICA || '', i.NOVEDAD || '', String(i.FECHA_VERIFICACION || '').substring(0, 16)];
+      }),
+      styles: { fontSize: 7.5, cellPadding: 3 },
+      headStyles: { fillColor: [30, 58, 138] }
+    });
+    var y = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 50;
+    if (y > 540) { doc.addPage(); y = 80; }
+    doc.line(80, y, 280, y); doc.line(400, y, 600, y);
+    doc.text('Responsable de la constatación', 100, y + 12);
+    doc.text('Custodio / Responsable del área', 420, y + 12);
+    doc.save('Ronda_' + r.ID_RONDA + '.pdf');
+  }
+
+  // =====================================================================
+  // 3. FOTOS DE LOS BIENES
+  // =====================================================================
+  var fotoCodigo = '';
+
+  function pintarPreview(dataUrl) {
+    var box = el('bien-foto-preview'), q = el('bien-foto-quitar');
+    if (!box) return;
+    box.innerHTML = dataUrl ? '<img alt="Foto del bien" src="' + dataUrl + '">' : '<span class="small text-muted">Sin foto</span>';
+    if (q) q.style.display = dataUrl ? '' : 'none';
+  }
+
+  function cargarPreview() {
+    var cod = fotoCodigo;
+    pintarPreview(null);
+    run('obtenerFotoBien', tk(), cod).then(function (res) {
+      if (cod === fotoCodigo && ok(res)) pintarPreview(res.data);
+    }).catch(function () { });
+  }
+
+  function prepararFotoModal(codigo) {
+    fotoCodigo = codigo || '';
+    var aviso = el('bien-foto-nueva-aviso'), ctl = el('bien-foto-controles');
+    if (!aviso || !ctl) return;
+    aviso.style.display = fotoCodigo ? 'none' : '';
+    ctl.style.display = fotoCodigo ? '' : 'none';
+    if (fotoCodigo) cargarPreview();
+  }
+
+  function reducirImagen(file) {
+    return new Promise(function (resolve, reject) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var max = 1024, w = img.width, h = img.height;
+        if (w > max || h > max) { var f = max / Math.max(w, h); w = Math.round(w * f); h = Math.round(h * f); }
+        var c = document.createElement('canvas'); c.width = w; c.height = h;
+        c.getContext('2d').drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.8));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('No se pudo leer la imagen. Use una foto JPG o PNG.')); };
+      img.src = url;
+    });
+  }
+
+  function subirFoto(input) {
+    var file = input.files && input.files[0];
+    input.value = '';
+    if (!file || !fotoCodigo) return;
+    var cod = fotoCodigo;
+    loading(true, 'Subiendo foto...');
+    reducirImagen(file).then(function (dataUrl) {
+      return run('subirFotoBien', tk(), cod, dataUrl);
+    }).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      notify('Foto guardada', 'La foto del bien ' + cod + ' se actualizó.', 'success');
+      if (cod === fotoCodigo) cargarPreview();
+      App.recargarBienes();
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function quitarFoto() {
+    if (!fotoCodigo || !confirm('¿Quitar la foto del bien ' + fotoCodigo + '?')) return;
+    var cod = fotoCodigo;
+    loading(true, 'Quitando foto...');
+    run('eliminarFotoBien', tk(), cod).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      notify('Foto eliminada', res.message, 'success');
+      pintarPreview(null);
+      App.recargarBienes();
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function verFoto(codigo) {
+    el('modal-foto-title').innerText = 'Foto del bien ' + codigo;
+    var body = el('modal-foto-body');
+    body.innerHTML = '<div class="py-4 text-muted">Cargando foto...</div>';
+    modal('modal-foto').show();
+    run('obtenerFotoBien', tk(), codigo).then(function (res) {
+      if (!ok(res)) { body.innerHTML = '<div class="text-danger">' + esc(res && res.message) + '</div>'; return; }
+      body.innerHTML = res.data ? '<img alt="Foto del bien" src="' + res.data + '" style="max-width:100%;border-radius:8px;">' : '<div class="text-muted py-3">Este bien no tiene foto.</div>';
+    }).catch(function (e) { body.innerHTML = '<div class="text-danger">' + esc(e.message) + '</div>'; });
+  }
+
+  // =====================================================================
+  // 4. CONFIGURACIÓN Y ALERTAS
+  // =====================================================================
+  function cargarConfig() {
+    var sel = el('cfg-hora');
+    if (sel && !sel.options.length) {
+      for (var h = 0; h < 24; h++) sel.insertAdjacentHTML('beforeend', '<option value="' + h + '">' + ('0' + h).slice(-2) + ':00</option>');
+    }
+    loading(true, 'Cargando configuración...');
+    run('obtenerConfiguracion', tk()).then(function (res) {
+      loading(false);
+      if (!ok(res)) { fail(res); return; }
+      var a = res.data.alertas || {}, d = res.data.depreciacion || {};
+      el('cfg-activo').checked = !!a.activo;
+      setVal('cfg-emails', a.emails || '');
+      setVal('cfg-hora', String(a.hora === undefined ? 7 : a.hora));
+      setVal('cfg-residual', d.residual === undefined ? 10 : d.residual);
+      el('cfg-cuota').innerText = a.cuotaCorreosRestante !== null && a.cuotaCorreosRestante !== undefined ? 'Correos que Google permite enviar hoy: ' + a.cuotaCorreosRestante : '';
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function leerConfig() {
+    return { activo: el('cfg-activo').checked, emails: val('cfg-emails'), hora: val('cfg-hora'), residual: val('cfg-residual') };
+  }
+
+  function guardarConfig() {
+    loading(true, 'Guardando configuración...');
+    run('guardarConfiguracion', tk(), leerConfig()).then(function (res) {
+      loading(false);
+      if (ok(res)) { notify('Guardado', res.message, 'success'); cargarConfig(); } else fail(res);
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  function enviarPrueba() {
+    if (!val('cfg-emails').trim()) { notify('Dato requerido', 'Escriba al menos un correo y guarde la configuración.', 'warning'); return; }
+    if (!confirm('Se enviará un correo de prueba a los destinatarios GUARDADOS (guarde antes si los cambió). ¿Continuar?')) return;
+    loading(true, 'Enviando correo de prueba...');
+    run('enviarAlertaPrueba', tk()).then(function (res) {
+      loading(false);
+      if (ok(res)) notify('Correo enviado', res.message || 'Revise su bandeja de entrada.', 'success'); else fail(res);
+    }).catch(function (e) { loading(false); fail(null, e); });
+  }
+
+  // =====================================================================
+  // Eventos
+  // =====================================================================
+  document.addEventListener('click', function (ev) {
+    var b = ev.target.closest && ev.target.closest('[data-mact]');
+    if (!b) return;
+    var id = b.getAttribute('data-id');
+    switch (b.getAttribute('data-mact')) {
+      case 'ronda-abrir': abrirRonda(id); break;
+      case 'item-ok': marcar(id, 'VERIFICADO', {}); break;
+      case 'item-novedad': abrirNovedad(id); break;
+      case 'item-falta': {
+        var n = prompt('El bien ' + id + ' NO fue encontrado. Detalle (opcional):', '');
+        if (n !== null) marcar(id, 'FALTANTE', { novedad: n }); break;
+      }
+      case 'item-deshacer': marcar(id, 'PENDIENTE', {}); break;
+    }
+  });
+
+  return {
+    etiquetasLote: etiquetasLote,
+    cargarRondas: cargarRondas, cambiarTipoRonda: cambiarTipoRonda, crearRonda: crearRonda, volverARondas: function () { volverARondas(false); },
+    renderRonda: renderRonda, guardarNovedad: guardarNovedad, cerrarRonda: cerrarRonda, pdfRonda: pdfRonda,
+    prepararFotoModal: prepararFotoModal, subirFoto: subirFoto, quitarFoto: quitarFoto, verFoto: verFoto,
+    cargarConfig: cargarConfig, guardarConfig: guardarConfig, enviarPrueba: enviarPrueba
+  };
+})();
+</script>

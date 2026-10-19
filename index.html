@@ -1,0 +1,1747 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Sistema de Control de Bienes y Existencias</title>
+
+  <!-- Tipografía Google Font Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet">
+
+  <!-- Bootstrap 5 CSS y Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+
+  <!-- SheetJS para lectura/escritura de Excel XLSX -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <!-- Chart.js para gráficos de Dashboard -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+
+  <!-- ZXing JS para escaneo de códigos QR y códigos de barras con cámara -->
+  <script src="https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js"></script>
+
+  <!-- jsQR: lector de códigos QR más tolerante en fotos -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+
+  <!-- Generador de códigos QR para etiquetas -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Exportación a PDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- Inclusión de Estilos Personalizados del Sistema -->
+  <?!= include('style'); ?>
+
+</head>
+
+<body>
+
+  <!-- ========================================================================
+       1. PANTALLA DE LOGIN
+       ======================================================================== -->
+  <div id="view-login">
+    <div class="login-card-container">
+      <div class="login-header">
+        <div class="login-logo">
+          <i class="bi bi-box-seam-fill"></i>
+        </div>
+        <h2>SISTEMA PATRIMONIAL</h2>
+        <p>Control Integral de Bienes Muebles, Inmuebles y Existencias</p>
+      </div>
+
+      <form id="form-login" onsubmit="event.preventDefault(); App.ejecutarLogin(event); return false;"
+        action="javascript:void(0);" method="POST">
+        <div class="form-group-custom">
+          <label class="form-label-custom" for="login-email">Correo Electrónico:</label>
+          <div class="input-group">
+            <span class="input-group-text bg-light"><i class="bi bi-envelope"></i></span>
+            <input type="email" id="login-email" class="form-control-custom" placeholder="usuario@institucion.gob.ec"
+              autocomplete="username" required>
+          </div>
+        </div>
+
+        <div class="form-group-custom mb-3">
+          <label class="form-label-custom" for="login-password">Contraseña:</label>
+          <div class="input-group">
+            <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+            <input type="password" id="login-password" class="form-control-custom" placeholder="••••••••"
+              autocomplete="current-password" onkeydown="if(event.key==='Enter'){event.preventDefault(); App.ejecutarLogin(event);}"
+              required>
+          </div>
+        </div>
+
+        <!-- Mensaje de error en línea (visible y centrado) -->
+        <div id="login-error-msg"
+          style="display:none; background:#fef2f2; border:1px solid #fecaca; color:#b91c1c; border-radius:8px; padding:10px 14px; margin-bottom:12px; font-size:13px; text-align:center; font-weight:500;">
+          <i class="bi bi-exclamation-triangle-fill me-1"></i>
+          <span></span>
+        </div>
+
+        <div class="d-grid gap-2 mb-3">
+          <button type="button" id="btn-submit-login" onclick="App.ejecutarLogin(event)"
+            class="btn btn-primary-custom w-100 justify-content-center py-2">
+            INGRESAR AL SISTEMA
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+
+  <!-- ========================================================================
+       2. ESTRUCTURA PRINCIPAL DE LA APLICACIÓN (LAYOUT TRAS LOGIN)
+       ======================================================================== -->
+  <div id="app-layout" style="display: none;">
+
+    <!-- BARRA LATERAL (SIDEBAR) -->
+    <aside class="app-sidebar">
+      <div class="sidebar-header">
+        <div class="brand-icon">
+          <i class="bi bi-box-seam"></i>
+        </div>
+        <div>
+          <div class="brand-text">PATRIMONIO</div>
+          <div class="brand-sub">Bienes & Existencias</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-menu">
+        <div class="menu-section-title">Principal</div>
+        <a class="nav-link-custom active" data-view="dashboard" onclick="App.navTo('dashboard')">
+          <i class="bi bi-speedometer2"></i>
+          <span>Dashboard</span>
+        </a>
+
+        <div class="menu-section-title">Control Patrimonial</div>
+        <a class="nav-link-custom" data-view="bienes" onclick="App.navTo('bienes')">
+          <i class="bi bi-laptop"></i>
+          <span>Bienes (BLD / BCA)</span>
+        </a>
+        <a class="nav-link-custom" data-view="custodios" onclick="App.navTo('custodios')">
+          <i class="bi bi-people"></i>
+          <span>Custodios</span>
+        </a>
+
+        <div class="menu-section-title">Almacén y Consumo</div>
+        <a class="nav-link-custom" data-view="existencias" onclick="App.navTo('existencias')">
+          <i class="bi bi-boxes"></i>
+          <span>Existencias</span>
+        </a>
+        <a class="nav-link-custom" data-view="movimientos" onclick="App.navTo('movimientos')">
+          <i class="bi bi-arrow-left-right"></i>
+          <span>Kardex / Movimientos</span>
+        </a>
+
+        <div class="menu-section-title">Operaciones de Campo</div>
+        <a class="nav-link-custom" data-view="constatacion" onclick="App.navTo('constatacion')">
+          <i class="bi bi-qr-code-scan"></i>
+          <span>Constatación Móvil</span>
+        </a>
+        <a class="nav-link-custom" data-view="rondas" onclick="App.navTo('rondas')">
+          <i class="bi bi-list-check"></i>
+          <span>Constatación por Rondas</span>
+        </a>
+        <a class="nav-link-custom" data-view="historial" onclick="App.navTo('historial')">
+          <i class="bi bi-clipboard-check"></i>
+          <span>Historial de Constataciones</span>
+        </a>
+        <a class="nav-link-custom" id="nav-item-importacion" data-view="importacion" onclick="App.navTo('importacion')">
+          <i class="bi bi-file-earmark-spreadsheet"></i>
+          <span>Carga Masiva (Excel)</span>
+        </a>
+        <a class="nav-link-custom" data-view="reportes" onclick="App.navTo('reportes')">
+          <i class="bi bi-printer"></i>
+          <span>Reportes & Etiquetas</span>
+        </a>
+
+        <a class="nav-link-custom" data-view="manual" onclick="App.navTo('manual')">
+          <i class="bi bi-question-circle"></i>
+          <span>Manual de Uso</span>
+        </a>
+
+        <div class="menu-section-title">Administración</div>
+        <a class="nav-link-custom" id="nav-item-usuarios" data-view="usuarios" onclick="App.navTo('usuarios')">
+          <i class="bi bi-person-gear"></i>
+          <span>Usuarios del Sistema</span>
+        </a>
+        <a class="nav-link-custom" id="nav-item-config" data-view="config" onclick="App.navTo('config')">
+          <i class="bi bi-gear"></i>
+          <span>Configuración y Alertas</span>
+        </a>
+        <a class="nav-link-custom" id="nav-item-auditoria" data-view="auditoria" onclick="App.navTo('auditoria')">
+          <i class="bi bi-clock-history"></i>
+          <span>Auditoría de Cambios</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-profile-badge">
+          <div class="user-avatar" id="sidebar-user-avatar">AD</div>
+          <div class="user-info-text">
+            <div class="user-name" id="sidebar-user-name">Administrador</div>
+            <div class="user-role-tag" id="sidebar-user-role">ADMINISTRADOR</div>
+          </div>
+          <button class="btn btn-link text-white-50 p-1" title="Cambiar contraseña" onclick="App.abrirModalPassword()">
+            <i class="bi bi-key fs-5"></i>
+          </button>
+          <button class="btn btn-link text-white-50 p-1" title="Cerrar Sesión" onclick="App.logout()">
+            <i class="bi bi-box-arrow-right fs-5"></i>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ÁREA PRINCIPAL -->
+    <main class="app-main">
+
+      <!-- HEADER SUPERIOR -->
+      <header class="app-header">
+        <div class="header-left">
+          <button class="btn-sidebar-toggle" id="btn-toggle-sidebar" aria-label="Abrir Menú">
+            <i class="bi bi-list"></i>
+          </button>
+          <div class="page-title-box">
+            <h1>Sistema Institucional de Bienes y Existencias</h1>
+            <p>Gestión Patrimonial, Kardex y Constatación Física</p>
+          </div>
+        </div>
+
+        <div class="header-right">
+          <div class="badge-live-status">
+            <div class="status-dot"></div>
+            <span>Conectado a Google Sheets</span>
+          </div>
+          <span class="badge bg-secondary d-none d-md-inline" id="header-user-role">ADMIN</span>
+          <button class="btn btn-outline-danger btn-sm" onclick="App.logout()" title="Salir">
+            <i class="bi bi-power"></i> <span class="d-none d-sm-inline">Salir</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- CONTENIDO DINÁMICO DE VISTAS (SPA) -->
+      <div class="app-content">
+
+        <!-- ==================================================================
+             VISTA 1: DASHBOARD
+             ================================================================== -->
+        <section id="view-dashboard" class="view-section active">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-speedometer2 text-primary me-2"></i>Panel de Control
+              General</h2>
+            <button class="btn btn-outline-custom btn-sm" onclick="App.cargarDashboard()">
+              <i class="bi bi-arrow-clockwise me-1"></i> Actualizar Métricas
+            </button>
+          </div>
+
+          <!-- TARJETAS KPIS -->
+          <div class="kpi-grid">
+            <div class="kpi-card card-blue">
+              <div>
+                <div class="kpi-label">Total Bienes Registrados</div>
+                <div class="kpi-value" id="kpi-total-bienes">0</div>
+                <div class="kpi-sub"><span id="kpi-total-bld">0</span> BLD | <span id="kpi-total-bca">0</span> BCA</div>
+              </div>
+              <div class="kpi-icon-box icon-blue"><i class="bi bi-laptop"></i></div>
+            </div>
+
+            <div class="kpi-card card-emerald">
+              <div>
+                <div class="kpi-label">Valor Contable Total</div>
+                <div class="kpi-value text-success" id="kpi-valor-contable">$0.00</div>
+                <div class="kpi-sub"><i class="bi bi-cash-stack"></i> Activos Institucionales</div>
+              </div>
+              <div class="kpi-icon-box icon-emerald"><i class="bi bi-currency-dollar"></i></div>
+            </div>
+
+            <div class="kpi-card card-amber">
+              <div>
+                <div class="kpi-label">Suministros en Almacén</div>
+                <div class="kpi-value" id="kpi-total-productos">0</div>
+                <div class="kpi-sub text-danger fw-bold"><span id="kpi-bajo-stock">0</span> bajo stock mínimo</div>
+              </div>
+              <div class="kpi-icon-box icon-amber"><i class="bi bi-boxes"></i></div>
+            </div>
+
+            <div class="kpi-card card-purple">
+              <div>
+                <div class="kpi-label">Movimientos del Mes</div>
+                <div class="kpi-value" id="kpi-movimientos-mes">0</div>
+                <div class="kpi-sub"><i class="bi bi-journal-arrow-up"></i> Entradas / Salidas Kardex</div>
+              </div>
+              <div class="kpi-icon-box icon-purple"><i class="bi bi-arrow-left-right"></i></div>
+            </div>
+          </div>
+
+          <!-- GRÁFICOS INTERACTIVOS -->
+          <div class="row g-3 mb-4">
+            <div class="col-12 col-lg-6">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-pie-chart text-primary"></i> Estado y Condición de los Bienes</h3>
+                </div>
+                <div class="card-body-custom" style="height: 280px;">
+                  <canvas id="chart-bienes-condicion"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-lg-6">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-bar-chart-steps text-info"></i> Top Custodios con Mayor Carga</h3>
+                </div>
+                <div class="card-body-custom" style="height: 280px;">
+                  <canvas id="chart-top-custodios"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-lg-6">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-bar-chart text-success"></i> Entradas vs Salidas de Existencias (Mes)</h3>
+                </div>
+                <div class="card-body-custom" style="height: 240px;">
+                  <canvas id="chart-movimientos-mes"></canvas>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-12 col-lg-6">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-diagram-3 text-warning"></i> Composición: BLD vs BCA</h3>
+                </div>
+                <div class="card-body-custom" style="height: 240px;">
+                  <canvas id="chart-proporcion-tipo"></canvas>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 2: BIENES MUEBLES E INMUEBLES
+             ================================================================== -->
+        <section id="view-bienes" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-laptop text-primary me-2"></i>Control de Bienes
+                Muebles e Inmuebles</h2>
+              <p class="text-muted small mb-0">Gestión de Bienes de Larga Duración (BLD) y Control Administrativo (BCA)
+              </p>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+              <button class="btn btn-outline-secondary" onclick="Mejoras.etiquetasLote()" title="Genera un PDF con las etiquetas QR de los bienes que se ven en la tabla">
+                <i class="bi bi-qr-code"></i> Etiquetas en lote (PDF)
+              </button>
+              <button class="btn btn-primary-custom role-action-btn" onclick="App.abrirModalNuevoBien()">
+                <i class="bi bi-plus-circle"></i> Nuevo Bien
+              </button>
+            </div>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <!-- Filtros -->
+              <div class="filter-bar">
+                <div class="search-input-group">
+                  <i class="bi bi-search"></i>
+                  <input type="text" id="filter-bien-busqueda"
+                    placeholder="Buscar por código, serie, bien, marca o custodio..." oninput="App.filtrarBienes()">
+                </div>
+                <select id="filter-bien-tipo" class="filter-select" onchange="App.filtrarBienes()">
+                  <option value="TODOS">Todos los tipos</option>
+                  <option value="BLD">BLD (Larga Duración)</option>
+                  <option value="BCA">BCA (Control Adm.)</option>
+                </select>
+                <select id="filter-bien-condicion" class="filter-select" onchange="App.filtrarBienes()">
+                  <option value="TODOS">Todas las condiciones</option>
+                  <option value="NUEVO">NUEVO</option>
+                  <option value="BUENO">BUENO</option>
+                  <option value="REGULAR">REGULAR</option>
+                  <option value="MALO">MALO</option>
+                  <option value="DAÑADO">DAÑADO</option>
+                  <option value="OBSOLETO">OBSOLETO</option>
+                  <option value="BAJA">BAJA</option>
+                </select>
+                <select id="filter-bien-custodio" class="filter-select" onchange="App.filtrarBienes()">
+                  <option value="TODOS">Todos los custodios</option>
+                </select>
+              </div>
+
+              <!-- Tabla -->
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>Tipo</th>
+                      <th>Código</th>
+                      <th>Descripción / Bien</th>
+                      <th>Condición</th>
+                      <th>Custodio</th>
+                      <th>Ubicación</th>
+                      <th class="text-end">Valor ($)</th>
+                      <th class="text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-bienes">
+                    <tr>
+                      <td colspan="8" class="text-center py-4">Cargando catálogo de bienes...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 3: CUSTODIOS
+             ================================================================== -->
+        <section id="view-custodios" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-people text-primary me-2"></i>Gestión de Custodios
+                Responsables</h2>
+              <p class="text-muted small mb-0">Control de servidores públicos y bienes asignados a su cargo</p>
+            </div>
+            <button class="btn btn-primary-custom role-action-btn" onclick="App.abrirModalNuevoCustodio()">
+              <i class="bi bi-person-plus"></i> Nuevo Custodio
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="filter-bar">
+                <div class="search-input-group" style="max-width: 100%;">
+                  <i class="bi bi-search"></i>
+                  <input type="text" id="filter-custodio-busqueda" placeholder="Buscar por cédula, nombre o departamento..."
+                    oninput="App.filtrarCustodios()">
+                </div>
+              </div>
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Cédula</th>
+                      <th>Nombre y Apellido</th>
+                      <th>Cargo</th>
+                      <th>Departamento</th>
+                      <th class="text-center">Bienes Asignados</th>
+                      <th class="text-center">Estado</th>
+                      <th class="text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-custodios">
+                    <tr>
+                      <td colspan="8" class="text-center py-4">Cargando lista de custodios...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 4: EXISTENCIAS Y SUMINISTROS
+             ================================================================== -->
+        <section id="view-existencias" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-boxes text-primary me-2"></i>Control de Existencias
+                y Suministros</h2>
+              <p class="text-muted small mb-0">Materiales consumibles, insumos de oficina y suministros de bodega</p>
+            </div>
+            <button class="btn btn-primary-custom role-action-btn" onclick="App.abrirModalNuevaExistencia()">
+              <i class="bi bi-plus-circle"></i> Nuevo Suministro
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="filter-bar">
+                <div class="search-input-group">
+                  <i class="bi bi-search"></i>
+                  <input type="text" id="filter-ex-busqueda" placeholder="Buscar por código, descripción o cuenta..."
+                    oninput="App.filtrarExistencias()">
+                </div>
+                <select id="filter-ex-estado" class="filter-select" onchange="App.filtrarExistencias()">
+                  <option value="TODOS">Todos los estados</option>
+                  <option value="BUENO">BUENO</option>
+                  <option value="REGULAR">REGULAR</option>
+                  <option value="DETERIORADO">DETERIORADO</option>
+                  <option value="OBSOLETO">OBSOLETO</option>
+                  <option value="BAJA">BAJA</option>
+                </select>
+                <div class="form-check form-switch ms-2">
+                  <input class="form-check-input" type="checkbox" id="filter-ex-bajo-stock"
+                    onchange="App.filtrarExistencias()">
+                  <label class="form-check-label small fw-bold" for="filter-ex-bajo-stock">Solo bajo stock</label>
+                </div>
+              </div>
+
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Código</th>
+                      <th>Descripción del Producto</th>
+                      <th class="text-center">Stock Actual</th>
+                      <th class="text-center">Mínimo</th>
+                      <th class="text-center">Estado</th>
+                      <th>Observación</th>
+                      <th class="text-center">Kardex / Mov.</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-existencias">
+                    <tr>
+                      <td colspan="8" class="text-center py-4">Cargando existencias...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 5: KARDEX (MOVIMIENTOS DE EXISTENCIAS)
+             ================================================================== -->
+        <section id="view-movimientos" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-arrow-left-right text-primary me-2"></i>Kardex de
+                Existencias</h2>
+              <p class="text-muted small mb-0">Registro histórico inmutable de compras, entregas, consumos y ajustes</p>
+            </div>
+            <button class="btn btn-primary-custom role-action-btn" onclick="App.abrirModalNuevoMovimiento()">
+              <i class="bi bi-plus-slash-minus"></i> Registrar Movimiento
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="filter-bar">
+                <div class="search-input-group">
+                  <i class="bi bi-search"></i>
+                  <input type="text" id="filter-mov-busqueda"
+                    placeholder="Buscar por código, ID, descripción o responsable..." oninput="App.filtrarMovimientos()">
+                </div>
+                <select id="filter-mov-codigo" class="filter-select" onchange="App.filtrarMovimientos()">
+                  <option value="TODOS">Todos los productos</option>
+                </select>
+                <select id="filter-mov-tipo" class="filter-select" onchange="App.filtrarMovimientos()">
+                  <option value="TODOS">Todos los tipos</option>
+                  <option value="INGRESO POR COMPRA">INGRESO POR COMPRA</option>
+                  <option value="DEVOLUCIÓN">DEVOLUCIÓN</option>
+                  <option value="ENTREGA">ENTREGA</option>
+                  <option value="CONSUMO">CONSUMO</option>
+                  <option value="AJUSTE">AJUSTE</option>
+                  <option value="BAJA">BAJA</option>
+                </select>
+              </div>
+
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>ID Mov.</th>
+                      <th>Fecha</th>
+                      <th>Tipo Movimiento</th>
+                      <th>Código</th>
+                      <th>Descripción</th>
+                      <th class="text-center text-success">Entrada</th>
+                      <th class="text-center text-danger">Salida</th>
+                      <th class="text-center bg-light">Saldo</th>
+                      <th>Responsable</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-movimientos">
+                    <tr>
+                      <td colspan="9" class="text-center py-4">Cargando movimientos de Kardex...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 6: CONSTATACIÓN FÍSICA MÓVIL CON CÁMARA (QR / BARRAS)
+             ================================================================== -->
+        <section id="view-constatacion" class="view-section">
+          <div class="text-center mb-3">
+            <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-camera-fill text-primary me-2"></i>Constatación Física
+              Móvil</h2>
+            <p class="text-muted small">Escanee códigos QR o de barras para auditoría presencial en campo</p>
+          </div>
+
+          <!-- Selector de Modo: Bienes o Existencias -->
+          <div class="d-flex justify-content-center mb-3">
+            <div class="btn-group" role="group">
+              <button type="button" id="tab-mode-bienes" class="btn btn-outline-primary active fw-bold"
+                onclick="ScannerApp.setScanMode('BIENES')">
+                <i class="bi bi-laptop me-1"></i> Bienes (BLD / BCA)
+              </button>
+              <button type="button" id="tab-mode-existencias" class="btn btn-outline-primary fw-bold"
+                onclick="ScannerApp.setScanMode('EXISTENCIAS')">
+                <i class="bi bi-boxes me-1"></i> Existencias (Suministros)
+              </button>
+            </div>
+          </div>
+
+          <!-- VISOR DE CÁMARA ZXING -->
+          <div class="row justify-content-center">
+            <div class="col-12 col-md-8 col-lg-6">
+              <!-- Escaneo por foto con la cámara del teléfono -->
+              <div id="scanner-photo-box" class="card-custom">
+                <div class="card-body-custom py-4 text-center">
+                  <div class="mb-3" style="font-size: 3rem; line-height: 1;"><i class="bi bi-qr-code-scan text-primary"></i></div>
+                  <div id="scanner-status-text" class="small text-muted mb-3">
+                    Toque el botón, tome una foto del código QR o de barras y el sistema lo leerá.
+                  </div>
+                  <input type="file" id="input-scan-photo" accept="image/*" capture="environment" style="display:none"
+                    onchange="ScannerApp.leerDesdeFoto(this)">
+                  <button type="button" class="btn btn-primary btn-lg fw-bold px-4"
+                    onclick="document.getElementById('input-scan-photo').click()">
+                    <i class="bi bi-camera-fill me-2"></i> Tomar foto del código
+                  </button>
+                  <div class="small text-muted mt-3">Acérquese al código, enfoque y evite reflejos.</div>
+                </div>
+              </div>
+
+              <!-- Entrada manual si la cámara no enfoca o código dañado -->
+              <div class="card-custom mt-3">
+                <div class="card-body-custom py-2">
+                  <div class="input-group">
+                    <span class="input-group-text bg-light"><i class="bi bi-keyboard"></i></span>
+                    <input type="text" id="input-manual-code" class="form-control"
+                      placeholder="Ingrese código manual (ej. BLD-00001 o EX-0001)...">
+                    <button class="btn btn-primary"
+                      onclick="ScannerApp.procesarCodigoEscaneado(document.getElementById('input-manual-code').value)">
+                      <i class="bi bi-search me-1"></i> Consultar
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Tarjeta Dinámica de Resultado -->
+              <div id="scan-result-container" style="display: none;"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 7: CARGA MASIVA (EXCEL / CSV)
+             ================================================================== -->
+        <section id="view-importacion" class="view-section">
+          <div class="mb-3">
+            <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-file-earmark-spreadsheet text-primary me-2"></i>Carga
+              Masiva de Datos</h2>
+            <p class="text-muted small">Importe lotes institucionales desde archivos Excel (.xlsx) o archivos planos
+              (.csv)</p>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="row g-3 align-items-center mb-3">
+                <div class="col-12 col-md-4">
+                  <label class="form-label small fw-bold">Seleccione Destino de Importación:</label>
+                  <select id="import-modulo-select" class="form-select">
+                    <option value="BIENES">Bienes Muebles e Inmuebles (BLD / BCA)</option>
+                    <option value="EXISTENCIAS">Existencias y Suministros (Almacén)</option>
+                  </select>
+                </div>
+
+                <div class="col-12 col-md-8">
+                  <label class="form-label small fw-bold">Archivo Excel (.xlsx) o CSV:</label>
+                  <input type="file" id="input-file-import" class="form-control" accept=".xlsx, .xls, .csv">
+                </div>
+              </div>
+
+              <div class="alert alert-info py-2 small mb-3">
+                <i class="bi bi-info-circle-fill me-1"></i>
+                <strong>Columnas esperadas para Bienes:</strong> TIPO_BIEN (BLD/BCA), BIEN, SERIE, MODELO, MARCA,
+                CONDICION, CUSTODIO, VALOR_CONTABLE, UBICACION.
+                El sistema valida duplicados, tipos y formato antes de importar.
+              </div>
+
+              <!-- Vista previa de validación -->
+              <div id="import-preview-box" style="display: none;">
+                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+                  <h6 class="fw-bold mb-0">
+                    Vista Previa de Importación:
+                    <span class="badge bg-primary me-1"><span id="import-stat-total">0</span> Total</span>
+                    <span class="badge bg-success me-1"><span id="import-stat-validos">0</span> Válidos</span>
+                    <span class="badge bg-danger"><span id="import-stat-errores">0</span> Con Errores</span>
+                  </h6>
+                  <button id="btn-confirm-import" class="btn btn-success btn-sm fw-bold"
+                    onclick="App.confirmarImportacionMasiva()">
+                    <i class="bi bi-cloud-upload me-1"></i> Confirmar e Importar Filas Válidas
+                  </button>
+                </div>
+
+                <div class="table-responsive-custom" style="max-height: 350px;">
+                  <table class="table-modern">
+                    <thead>
+                      <tr>
+                        <th>Estado</th>
+                        <th>Código</th>
+                        <th>Nombre / Descripción</th>
+                        <th>Diagnóstico de Validación</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbody-import-preview"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 8: REPORTES Y ETIQUETAS
+             ================================================================== -->
+        <section id="view-reportes" class="view-section">
+          <div class="mb-3">
+            <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-printer text-primary me-2"></i>Centro de Reportes
+              Institucionales</h2>
+            <p class="text-muted small">Generación de listados oficiales, kardex y descarga de archivos Excel / PDF</p>
+          </div>
+
+          <div class="row g-3">
+            <!-- BIENES -->
+            <div class="col-12 col-lg-4">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-laptop text-success"></i> Bienes Patrimoniales</h3>
+                </div>
+                <div class="card-body-custom">
+                  <div class="row g-2 mb-3">
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Tipo</label>
+                      <select id="rep-bien-tipo" class="form-select form-select-sm">
+                        <option value="TODOS">Todos</option>
+                        <option value="BLD">BLD</option>
+                        <option value="BCA">BCA</option>
+                      </select>
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Condición</label>
+                      <select id="rep-bien-condicion" class="form-select form-select-sm">
+                        <option value="TODOS">Todas</option>
+                        <option value="NUEVO">NUEVO</option>
+                        <option value="BUENO">BUENO</option>
+                        <option value="REGULAR">REGULAR</option>
+                        <option value="MALO">MALO</option>
+                        <option value="DAÑADO">DAÑADO</option>
+                        <option value="OBSOLETO">OBSOLETO</option>
+                        <option value="BAJA">BAJA</option>
+                      </select>
+                    </div>
+                    <div class="col-12">
+                      <label class="form-label small fw-bold mb-1">Custodio</label>
+                      <select id="rep-bien-custodio" class="form-select form-select-sm">
+                        <option value="TODOS">Todos los custodios</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="d-grid gap-2">
+                    <button class="btn btn-outline-success" onclick="App.exportarReporte('bienes', 'excel')">
+                      <i class="bi bi-file-earmark-excel me-1"></i> Descargar Excel
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="App.exportarReporte('bienes', 'pdf')">
+                      <i class="bi bi-file-earmark-pdf me-1"></i> Descargar PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- EXISTENCIAS -->
+            <div class="col-12 col-lg-4">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-boxes text-warning"></i> Existencias y Suministros</h3>
+                </div>
+                <div class="card-body-custom">
+                  <div class="row g-2 mb-3">
+                    <div class="col-12">
+                      <label class="form-label small fw-bold mb-1">Estado</label>
+                      <select id="rep-ex-estado" class="form-select form-select-sm">
+                        <option value="TODOS">Todos</option>
+                        <option value="BUENO">BUENO</option>
+                        <option value="REGULAR">REGULAR</option>
+                        <option value="DETERIORADO">DETERIORADO</option>
+                        <option value="OBSOLETO">OBSOLETO</option>
+                        <option value="BAJA">BAJA</option>
+                      </select>
+                    </div>
+                    <div class="col-12">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="rep-ex-bajo">
+                        <label class="form-check-label small fw-bold" for="rep-ex-bajo">Solo productos bajo el stock mínimo</label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="d-grid gap-2">
+                    <button class="btn btn-outline-success" onclick="App.exportarReporte('existencias', 'excel')">
+                      <i class="bi bi-file-earmark-excel me-1"></i> Descargar Excel
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="App.exportarReporte('existencias', 'pdf')">
+                      <i class="bi bi-file-earmark-pdf me-1"></i> Descargar PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- DEPRECIACIÓN -->
+            <div class="col-12 col-lg-4">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-graph-down text-danger"></i> Depreciación y Valor en Libros</h3>
+                </div>
+                <div class="card-body-custom">
+                  <div class="row g-2 mb-3">
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Tipo</label>
+                      <select id="rep-dep-tipo" class="form-select form-select-sm">
+                        <option value="BLD">BLD (recomendado)</option>
+                        <option value="BCA">BCA</option>
+                        <option value="TODOS">Todos</option>
+                      </select>
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Custodio</label>
+                      <select id="rep-dep-custodio" class="form-select form-select-sm">
+                        <option value="TODOS">Todos</option>
+                      </select>
+                    </div>
+                    <div class="col-12">
+                      <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="rep-dep-bajas">
+                        <label class="form-check-label small fw-bold" for="rep-dep-bajas">Incluir bienes dados de baja</label>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="d-grid gap-2">
+                    <button class="btn btn-outline-success" onclick="App.exportarReporte('depreciacion', 'excel')">
+                      <i class="bi bi-file-earmark-excel me-1"></i> Descargar Excel
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="App.exportarReporte('depreciacion', 'pdf')">
+                      <i class="bi bi-file-earmark-pdf me-1"></i> Descargar PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- KARDEX -->
+            <div class="col-12 col-lg-4">
+              <div class="card-custom h-100">
+                <div class="card-header-custom">
+                  <h3><i class="bi bi-journal-text text-primary"></i> Kardex de Movimientos</h3>
+                </div>
+                <div class="card-body-custom">
+                  <div class="row g-2 mb-3">
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Desde</label>
+                      <input type="date" id="rep-mov-desde" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-6">
+                      <label class="form-label small fw-bold mb-1">Hasta</label>
+                      <input type="date" id="rep-mov-hasta" class="form-control form-control-sm">
+                    </div>
+                    <div class="col-12">
+                      <label class="form-label small fw-bold mb-1">Tipo de movimiento</label>
+                      <select id="rep-mov-tipo" class="form-select form-select-sm">
+                        <option value="TODOS">Todos</option>
+                        <option value="INGRESO POR COMPRA">INGRESO POR COMPRA</option>
+                        <option value="DEVOLUCIÓN">DEVOLUCIÓN</option>
+                        <option value="ENTREGA">ENTREGA</option>
+                        <option value="CONSUMO">CONSUMO</option>
+                        <option value="AJUSTE">AJUSTE</option>
+                        <option value="BAJA">BAJA</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="d-grid gap-2">
+                    <button class="btn btn-outline-success" onclick="App.exportarReporte('movimientos', 'excel')">
+                      <i class="bi bi-file-earmark-excel me-1"></i> Descargar Excel
+                    </button>
+                    <button class="btn btn-outline-danger" onclick="App.exportarReporte('movimientos', 'pdf')">
+                      <i class="bi bi-file-earmark-pdf me-1"></i> Descargar PDF
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 9: USUARIOS DEL SISTEMA (ADMINISTRADOR)
+             ================================================================== -->
+        <section id="view-usuarios" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-person-gear text-primary me-2"></i>Usuarios y Roles
+                del Sistema</h2>
+              <p class="text-muted small mb-0">Control de credenciales, roles institucionales (Administrador,
+                Inventariador, Consulta)</p>
+            </div>
+            <button class="btn btn-primary-custom" onclick="App.abrirModalNuevoUsuario()">
+              <i class="bi bi-person-plus"></i> Nuevo Usuario
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>Nombre</th>
+                      <th>Email Institucional</th>
+                      <th>Rol</th>
+                      <th>Estado</th>
+                      <th>Último Acceso</th>
+                      <th class="text-center">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-usuarios">
+                    <tr>
+                      <td colspan="7" class="text-center py-4">Cargando usuarios...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA: HISTORIAL DE CONSTATACIONES
+             ================================================================== -->
+        <!-- ==================================================================
+             VISTA: CONSTATACIÓN POR RONDAS
+             ================================================================== -->
+        <section id="view-rondas" class="view-section">
+          <div class="mb-3">
+            <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-list-check text-primary me-2"></i>Constatación por Rondas</h2>
+            <p class="text-muted small mb-0">Verifique de una vez todos los bienes de un custodio o de una ubicación y cierre la ronda con un resumen.</p>
+          </div>
+
+          <!-- Lista de rondas -->
+          <div id="rondas-lista-box">
+            <div class="card-custom mb-3">
+              <div class="card-header-custom"><h3><i class="bi bi-plus-circle text-success"></i> Nueva ronda</h3></div>
+              <div class="card-body-custom">
+                <div class="row g-2 align-items-end">
+                  <div class="col-12 col-md-3">
+                    <label class="form-label small fw-bold mb-1">Verificar por</label>
+                    <select id="ronda-tipo" class="form-select form-select-sm" onchange="Mejoras.cambiarTipoRonda()">
+                      <option value="CUSTODIO">Custodio</option>
+                      <option value="UBICACION">Ubicación</option>
+                    </select>
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <label class="form-label small fw-bold mb-1" id="ronda-valor-label">Custodio</label>
+                    <select id="ronda-valor" class="form-select form-select-sm"></select>
+                  </div>
+                  <div class="col-12 col-md-3 d-grid">
+                    <button class="btn btn-primary-custom btn-sm" onclick="Mejoras.crearRonda()"><i class="bi bi-play-circle me-1"></i> Iniciar ronda</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-custom">
+              <div class="card-header-custom"><h3><i class="bi bi-clock-history text-primary"></i> Rondas realizadas</h3></div>
+              <div class="card-body-custom">
+                <div class="table-responsive-custom">
+                  <table class="table-modern">
+                    <thead>
+                      <tr><th>Ronda</th><th>Fecha</th><th>Alcance</th><th>Estado</th><th class="text-center">Avance</th><th class="text-center">Acciones</th></tr>
+                    </thead>
+                    <tbody id="tbody-rondas"><tr><td colspan="6" class="text-center py-3">Cargando...</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Detalle de una ronda -->
+          <div id="ronda-detalle-box" style="display:none;">
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+              <button class="btn btn-outline-secondary btn-sm" onclick="Mejoras.volverARondas()"><i class="bi bi-arrow-left"></i> Volver</button>
+              <div class="d-flex gap-2">
+                <button class="btn btn-outline-danger btn-sm" id="btn-ronda-pdf" onclick="Mejoras.pdfRonda()"><i class="bi bi-file-earmark-pdf"></i> PDF</button>
+                <button class="btn btn-success btn-sm" id="btn-ronda-cerrar" onclick="Mejoras.cerrarRonda()"><i class="bi bi-check2-circle"></i> Cerrar ronda</button>
+              </div>
+            </div>
+            <div class="card-custom">
+              <div class="card-body-custom">
+                <h3 class="h6 fw-bold mb-1" id="ronda-titulo">Ronda</h3>
+                <div class="small text-muted mb-2" id="ronda-subtitulo"></div>
+                <div class="progress mb-2" style="height:10px;"><div id="ronda-barra" class="progress-bar bg-success" style="width:0%"></div></div>
+                <div class="small mb-3" id="ronda-resumen"></div>
+                <div class="row g-2 mb-2">
+                  <div class="col-12 col-md-6">
+                    <input type="text" id="ronda-buscar" class="form-control form-control-sm" placeholder="Buscar por código o nombre..." oninput="Mejoras.renderRonda()">
+                  </div>
+                  <div class="col-12 col-md-6">
+                    <select id="ronda-filtro-estado" class="form-select form-select-sm" onchange="Mejoras.renderRonda()">
+                      <option value="TODOS">Todos</option>
+                      <option value="PENDIENTE">Pendientes</option>
+                      <option value="VERIFICADO">Verificados</option>
+                      <option value="FALTANTE">Faltantes</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="table-responsive-custom">
+                  <table class="table-modern">
+                    <thead>
+                      <tr><th>Código</th><th>Bien</th><th>Condición</th><th>Estado</th><th class="text-center">Acciones</th></tr>
+                    </thead>
+                    <tbody id="tbody-ronda-items"></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA: MANUAL DE USO
+             ================================================================== -->
+        <section id="view-manual" class="view-section">
+          <div class="mb-3 d-flex justify-content-between align-items-start flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-question-circle text-primary me-2"></i>Manual de Uso</h2>
+              <p class="text-muted small mb-0">Guía rápida de las tareas más frecuentes.</p>
+            </div>
+            <button class="btn btn-outline-secondary btn-sm" onclick="window.print()"><i class="bi bi-printer me-1"></i> Imprimir</button>
+          </div>
+          <div class="card shadow-sm border-0"><div class="card-body small">
+            <h6 class="fw-bold text-primary">1. Roles</h6>
+            <ul>
+              <li><b>Administrador:</b> todo, incluidos usuarios, carga masiva, configuración y auditoría.</li>
+              <li><b>Inventariador:</b> crea y edita bienes, existencias, movimientos y constataciones.</li>
+              <li><b>Consulta:</b> solo ve información y reportes.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">2. Bienes y fotos</h6>
+            <ul>
+              <li>En <i>Bienes</i> pulse <b>Nuevo</b>, complete los datos (incluya la <b>fecha de adquisición</b>: se usa para la depreciación) y guarde.</li>
+              <li>Para añadir foto, edite el bien y use <b>Tomar / elegir foto</b>. Se guarda en Drive, no es pública.</li>
+              <li>El botón <b>Etiquetas en lote (PDF)</b> genera un PDF con las etiquetas de los bienes que se ven en la tabla. Imprima al 100 %.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">3. Existencias y kardex</h6>
+            <ul>
+              <li>Registre <b>ingresos, consumos y ajustes</b> en <i>Movimientos</i>; el stock se actualiza solo y queda en el kardex.</li>
+              <li>Los productos en o bajo su stock mínimo aparecen resaltados en el tablero.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">4. Constatación física</h6>
+            <ul>
+              <li><b>Constatación Móvil:</b> pulse <i>Tomar foto del código</i> y fotografíe la etiqueta QR/barras de un bien.</li>
+              <li><b>Por Rondas:</b> elija un custodio o una ubicación y pulse <i>Iniciar ronda</i>. Marque cada bien: <span class="text-success">conforme</span>, <span class="text-warning">con novedad</span> o <span class="text-danger">no encontrado</span>. Puede dejarla a medias y continuar después.</li>
+              <li>Al terminar pulse <b>Cerrar ronda</b> y descargue el <b>PDF</b> del acta para las firmas.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">5. Reportes</h6>
+            <ul>
+              <li>En <i>Reportes</i>: inventario, custodios, kardex y <b>depreciación</b> (línea recta, con valor residual configurable). Si un bien no tiene fecha de adquisición se usa la de registro y se marca como estimada.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">6. Alertas por correo (administrador)</h6>
+            <ul>
+              <li>En <i>Configuración y Alertas</i> escriba los correos, elija la hora, active y guarde. Use <b>Enviar correo de prueba</b> para comprobar.</li>
+              <li>Solo se envía correo si hay productos bajo el mínimo.</li>
+            </ul>
+            <h6 class="fw-bold text-primary">7. Buenas prácticas</h6>
+            <ul class="mb-0">
+              <li>Cambie las contraseñas iniciales y cierre sesión en equipos compartidos.</li>
+              <li>Haga una copia de la hoja de cálculo cada semana (Archivo → Hacer una copia).</li>
+              <li>No edite directamente las hojas AUDITORIA ni MOVIMIENTOS.</li>
+              <li>Si algo falla, anote el mensaje en pantalla y avise al administrador.</li>
+            </ul>
+          </div></div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA: CONFIGURACIÓN Y ALERTAS (ADMINISTRADOR)
+             ================================================================== -->
+        <section id="view-config" class="view-section">
+          <div class="mb-3">
+            <h2 class="h5 fw-bold mb-1 text-dark"><i class="bi bi-gear text-primary me-2"></i>Configuración y Alertas</h2>
+            <p class="text-muted small mb-0">Aviso diario por correo de productos bajo el stock mínimo y parámetros de depreciación.</p>
+          </div>
+          <div class="row g-3">
+            <div class="col-12 col-lg-7">
+              <div class="card-custom h-100">
+                <div class="card-header-custom"><h3><i class="bi bi-envelope-exclamation text-warning"></i> Alerta de stock bajo por correo</h3></div>
+                <div class="card-body-custom">
+                  <div class="form-check form-switch mb-3">
+                    <input class="form-check-input" type="checkbox" id="cfg-activo">
+                    <label class="form-check-label fw-bold small" for="cfg-activo">Enviar un resumen diario por correo</label>
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label small fw-bold mb-1">Correos destinatarios (separados por coma)</label>
+                    <textarea id="cfg-emails" class="form-control form-control-sm" rows="2" placeholder="bodega@institucion.gob.ec, jefe@institucion.gob.ec"></textarea>
+                  </div>
+                  <div class="mb-3">
+                    <label class="form-label small fw-bold mb-1">Hora de envío</label>
+                    <select id="cfg-hora" class="form-select form-select-sm" style="max-width:160px;"></select>
+                    <div class="form-text">Google puede enviarlo dentro de la hora elegida. Solo se envía si hay productos bajo el mínimo.</div>
+                  </div>
+                  <div class="small text-muted mb-3" id="cfg-cuota"></div>
+                  <div class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-primary-custom btn-sm" onclick="Mejoras.guardarConfig()"><i class="bi bi-save me-1"></i> Guardar</button>
+                    <button class="btn btn-outline-secondary btn-sm" onclick="Mejoras.enviarPrueba()"><i class="bi bi-send me-1"></i> Enviar correo de prueba</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-12 col-lg-5">
+              <div class="card-custom h-100">
+                <div class="card-header-custom"><h3><i class="bi bi-graph-down text-danger"></i> Depreciación</h3></div>
+                <div class="card-body-custom">
+                  <label class="form-label small fw-bold mb-1">Valor residual (% del valor contable)</label>
+                  <input type="number" id="cfg-residual" class="form-control form-control-sm" min="0" max="100" step="0.5" style="max-width:160px;">
+                  <div class="form-text mb-2">Método de línea recta. Se calcula con el valor contable, la vida útil (años) y la fecha de adquisición de cada bien.</div>
+                  <button class="btn btn-primary-custom btn-sm" onclick="Mejoras.guardarConfig()"><i class="bi bi-save me-1"></i> Guardar</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-historial" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-clipboard-check text-primary me-2"></i>Historial de
+                Constataciones</h2>
+              <p class="text-muted small mb-0">Registro de todas las verificaciones físicas realizadas en campo y bodega</p>
+            </div>
+            <button class="btn btn-outline-custom btn-sm" onclick="App.cargarHistorial()">
+              <i class="bi bi-arrow-clockwise me-1"></i> Actualizar
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="filter-bar">
+                <div class="btn-group" role="group">
+                  <button type="button" id="hist-tab-bienes" class="btn btn-outline-primary btn-sm active fw-bold"
+                    onclick="App.setHistorialTipo('BIENES')">Bienes</button>
+                  <button type="button" id="hist-tab-existencias" class="btn btn-outline-primary btn-sm fw-bold"
+                    onclick="App.setHistorialTipo('EXISTENCIAS')">Existencias</button>
+                </div>
+                <div class="search-input-group">
+                  <i class="bi bi-search"></i>
+                  <input type="text" id="filter-hist-busqueda" placeholder="Buscar por código, descripción, custodio o usuario..."
+                    oninput="App.filtrarHistorial()">
+                </div>
+                <div class="form-check form-switch ms-2">
+                  <input class="form-check-input" type="checkbox" id="filter-hist-novedades" onchange="App.filtrarHistorial()">
+                  <label class="form-check-label small fw-bold" for="filter-hist-novedades">Solo con diferencias</label>
+                </div>
+              </div>
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead id="thead-historial"></thead>
+                  <tbody id="tbody-historial">
+                    <tr><td colspan="8" class="text-center py-4">Cargando historial...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================================================================
+             VISTA 10: AUDITORÍA DE CAMBIOS
+             ================================================================== -->
+        <section id="view-auditoria" class="view-section">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <div>
+              <h2 class="h5 fw-bold mb-0 text-dark"><i class="bi bi-clock-history text-primary me-2"></i>Bitácora de
+                Auditoría del Sistema</h2>
+              <p class="text-muted small mb-0">Trazabilidad inmutable de todas las creaciones, bajas, modificaciones y
+                accesos</p>
+            </div>
+            <button class="btn btn-outline-custom btn-sm" onclick="App.cargarAuditoria()">
+              <i class="bi bi-arrow-clockwise me-1"></i> Actualizar
+            </button>
+          </div>
+
+          <div class="card-custom">
+            <div class="card-body-custom">
+              <div class="table-responsive-custom">
+                <table class="table-modern">
+                  <thead>
+                    <tr>
+                      <th>Fecha y Hora</th>
+                      <th>Usuario</th>
+                      <th>Acción</th>
+                      <th>Módulo</th>
+                      <th>Registro Afectado</th>
+                      <th>Valor Previo</th>
+                      <th>Valor Nuevo</th>
+                    </tr>
+                  </thead>
+                  <tbody id="tbody-auditoria">
+                    <tr>
+                      <td colspan="7" class="text-center py-4">Cargando bitácora de auditoría...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
+    <!-- ======================================================================
+         BARRA INFERIOR PARA CELULARES (MOBILE-FIRST BOTTOM NAV)
+         ====================================================================== -->
+    <nav class="mobile-bottom-nav">
+      <a class="bottom-nav-item active" data-view="dashboard" onclick="App.navTo('dashboard')">
+        <i class="bi bi-speedometer2"></i>
+        <span>Inicio</span>
+      </a>
+      <a class="bottom-nav-item" data-view="bienes" onclick="App.navTo('bienes')">
+        <i class="bi bi-laptop"></i>
+        <span>Bienes</span>
+      </a>
+      <a class="bottom-nav-item scan-highlight" data-view="constatacion" onclick="App.navTo('constatacion')">
+        <div class="scan-btn-circle">
+          <i class="bi bi-qr-code-scan"></i>
+        </div>
+        <span>Escanear</span>
+      </a>
+      <a class="bottom-nav-item" data-view="existencias" onclick="App.navTo('existencias')">
+        <i class="bi bi-boxes"></i>
+        <span>Stock</span>
+      </a>
+      <a class="bottom-nav-item" onclick="document.getElementById('btn-toggle-sidebar').click()">
+        <i class="bi bi-grid-fill"></i>
+        <span>Menú</span>
+      </a>
+    </nav>
+  </div>
+
+  <!-- ========================================================================
+       MODALES DEL SISTEMA
+       ======================================================================== -->
+
+  <!-- MODAL: BIEN PATRIMONIAL (CREAR / EDITAR) -->
+  <div class="modal fade" id="modal-bien" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold" id="modal-bien-title">Ficha de Bien</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-bien">
+            <input type="hidden" id="bien-modo" value="CREAR">
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Tipo de Bien (*):</label>
+                <select id="bien-tipo" class="form-select form-select-sm" required>
+                  <option value="BLD">BLD - Bien de Larga Duración</option>
+                  <option value="BCA">BCA - Bien de Control Administrativo</option>
+                </select>
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Código del Bien:</label>
+                <input type="text" id="bien-codigo" class="form-control form-control-sm font-monospace"
+                  placeholder="Auto-generado">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Condición (*):</label>
+                <select id="bien-condicion" class="form-select form-select-sm">
+                  <option value="NUEVO">NUEVO</option>
+                  <option value="BUENO" selected>BUENO</option>
+                  <option value="REGULAR">REGULAR</option>
+                  <option value="MALO">MALO</option>
+                  <option value="DAÑADO">DAÑADO</option>
+                  <option value="OBSOLETO">OBSOLETO</option>
+                  <option value="BAJA">BAJA</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Nombre del Bien (*):</label>
+              <input type="text" id="bien-nombre" class="form-control form-control-sm"
+                placeholder="Ej: Computador portátil Dell Latitude 5430" required>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Marca:</label>
+                <input type="text" id="bien-marca" class="form-control form-control-sm" placeholder="Ej: Dell">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Modelo:</label>
+                <input type="text" id="bien-modelo" class="form-control form-control-sm"
+                  placeholder="Ej: Latitude 5430">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Serie:</label>
+                <input type="text" id="bien-serie" class="form-control form-control-sm" placeholder="Ej: SN-998234-X">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Color:</label>
+                <input type="text" id="bien-color" class="form-control form-control-sm" placeholder="Gris">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Material:</label>
+                <input type="text" id="bien-material" class="form-control form-control-sm"
+                  placeholder="Aluminio / Plástico">
+              </div>
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Dimensión:</label>
+                <input type="text" id="bien-dimension" class="form-control form-control-sm" placeholder="14 pulgadas">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Custodio Responsable:</label>
+                <select id="bien-custodio" class="form-select form-select-sm"></select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Ubicación Física:</label>
+                <input type="text" id="bien-ubicacion" class="form-control form-control-sm"
+                  placeholder="Ej: Edificio Central - Piso 3">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Cuenta Contable:</label>
+                <input type="text" id="bien-cuenta" class="form-control form-control-sm"
+                  placeholder="141.01.07 Equipos de Computación">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small fw-bold">Vida Útil (Años):</label>
+                <input type="number" id="bien-vida-util" class="form-control form-control-sm" value="5" min="1">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label small fw-bold">Valor Contable ($):</label>
+                <input type="number" id="bien-valor" class="form-control form-control-sm" step="0.01" value="0.00">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-4">
+                <label class="form-label small fw-bold">Fecha de Adquisición:</label>
+                <input type="date" id="bien-fecha-adq" class="form-control form-control-sm">
+                <div class="form-text">Se usa para calcular la depreciación.</div>
+              </div>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Descripción Detallada:</label>
+              <textarea id="bien-descripcion" class="form-control form-control-sm" rows="2"
+                placeholder="Especificaciones técnicas completas..."></textarea>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Observaciones:</label>
+              <input type="text" id="bien-observacion" class="form-control form-control-sm"
+                placeholder="Novedades o antecedentes...">
+            </div>
+          </form>
+
+          <!-- Foto del bien (solo al editar) -->
+          <div id="bien-foto-box" class="border rounded p-2 mt-2">
+            <div class="small fw-bold mb-2"><i class="bi bi-camera me-1"></i>Foto del bien</div>
+            <div id="bien-foto-nueva-aviso" class="small text-muted" style="display:none;">Guarde el bien primero; luego podrá agregarle una foto desde "Editar".</div>
+            <div id="bien-foto-controles">
+              <div class="d-flex align-items-center gap-3 flex-wrap">
+                <div id="bien-foto-preview" class="foto-preview"><span class="small text-muted">Sin foto</span></div>
+                <div class="d-flex flex-column gap-2">
+                  <label class="btn btn-outline-primary btn-sm mb-0">
+                    <i class="bi bi-camera"></i> Tomar / elegir foto
+                    <input type="file" id="bien-foto-input" accept="image/*" capture="environment" style="display:none;" onchange="Mejoras.subirFoto(this)">
+                  </label>
+                  <button type="button" class="btn btn-outline-danger btn-sm" id="bien-foto-quitar" onclick="Mejoras.quitarFoto()"><i class="bi bi-trash"></i> Quitar foto</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarBien()">Guardar Bien</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VER FOTO DEL BIEN -->
+  <div class="modal fade" id="modal-foto" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold" id="modal-foto-title">Foto del bien</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body text-center" id="modal-foto-body"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: VER / IMPRIMIR ETIQUETA QR -->
+  <div class="modal fade" id="modal-qr-preview" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Etiqueta QR</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body text-center">
+          <div id="printable-qr-tag" class="qr-tag-printable">
+            <div class="qr-tag-header">CONTROL PATRIMONIAL INSTITUCIONAL</div>
+            <div id="qr-canvas-box" class="my-2"></div>
+            <div id="qr-modal-codigo" class="qr-tag-code">BLD-00001</div>
+            <div id="qr-modal-bien" class="qr-tag-desc">Nombre del Bien</div>
+            <div id="qr-modal-custodio" class="qr-tag-custodio">Custodio</div>
+            <div id="qr-modal-ubicacion" class="qr-tag-custodio">Ubicación</div>
+          </div>
+        </div>
+        <div class="modal-footer justify-content-center">
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.imprimirEtiquetaQR()">
+            <i class="bi bi-printer me-1"></i> Imprimir Etiqueta
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CUSTODIO -->
+  <div class="modal fade" id="modal-custodio" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Ficha de Custodio</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-custodio">
+            <input type="hidden" id="custodio-id" value="">
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Cédula / Identificación (*):</label>
+              <input type="text" id="custodio-cedula" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Nombre Completo (*):</label>
+              <input type="text" id="custodio-nombre" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Cargo Institucional:</label>
+              <input type="text" id="custodio-cargo" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Departamento / Unidad:</label>
+              <input type="text" id="custodio-depto" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Ubicación Habitual:</label>
+              <input type="text" id="custodio-ubicacion" class="form-control form-control-sm">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Estado:</label>
+              <select id="custodio-estado" class="form-select form-select-sm">
+                <option value="ACTIVO">ACTIVO</option>
+                <option value="INACTIVO">INACTIVO</option>
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarCustodio()">Guardar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: BIENES ASIGNADOS A CUSTODIO (ACTA) -->
+  <div class="modal fade" id="modal-custodio-bienes" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold"><i class="bi bi-file-earmark-text text-primary me-2"></i>Bienes Asignados
+            (Acta)</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body" id="modal-custodio-bienes-body"></div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">Cerrar</button>
+          <button type="button" class="btn btn-outline-danger btn-sm" onclick="App.descargarActaPDF()">
+            <i class="bi bi-file-earmark-pdf me-1"></i> Descargar PDF
+          </button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.imprimirActa()">
+            <i class="bi bi-printer me-1"></i> Imprimir Acta
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: NUEVA EXISTENCIA -->
+  <div class="modal fade" id="modal-existencia" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Nuevo Suministro en Existencias</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-existencia">
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Código de Suministro (*):</label>
+              <input type="text" id="ex-codigo" class="form-control form-control-sm font-monospace"
+                placeholder="Ej: EX-0006 o SUM-006" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Descripción del Producto (*):</label>
+              <input type="text" id="ex-descripcion" class="form-control form-control-sm"
+                placeholder="Ej: Resma Papel Bond A4 75g" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Cuenta Contable:</label>
+              <input type="text" id="ex-cuenta" class="form-control form-control-sm"
+                placeholder="131.01.01 Suministros de Oficina">
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label small fw-bold">Cantidad Inicial:</label>
+                <input type="number" id="ex-cantidad-inicial" class="form-control form-control-sm" value="0" min="0">
+              </div>
+              <div class="col-6">
+                <label class="form-label small fw-bold">Estado:</label>
+                <select id="ex-estado" class="form-select form-select-sm">
+                  <option value="BUENO">BUENO</option>
+                  <option value="REGULAR">REGULAR</option>
+                  <option value="DETERIORADO">DETERIORADO</option>
+                  <option value="OBSOLETO">OBSOLETO</option>
+                </select>
+              </div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Stock Mínimo (alerta):</label>
+              <input type="number" id="ex-stock-minimo" class="form-control form-control-sm" value="15" min="0" step="1">
+              <div class="form-text small">Cuando el stock llegue a este valor se marca como "bajo mínimo".</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Observación:</label>
+              <input type="text" id="ex-observacion" class="form-control form-control-sm"
+                placeholder="Ubicación en estantería o bodega...">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarExistencia()">Guardar
+            Suministro</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: NUEVO MOVIMIENTO KARDEX -->
+  <div class="modal fade" id="modal-movimiento" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Registrar Transacción en Kardex</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-movimiento">
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Producto / Suministro (*):</label>
+              <select id="mov-producto-select" class="form-select form-select-sm"
+                onchange="App.actualizarInfoProductoMovimiento()" required></select>
+              <div id="mov-stock-actual-box" class="form-text text-primary fw-bold"></div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Tipo de Movimiento (*):</label>
+                <select id="mov-tipo-select" class="form-select form-select-sm" onchange="App.toggleAjusteMovimiento()" required>
+                  <option value="INGRESO POR COMPRA">INGRESO POR COMPRA (+)</option>
+                  <option value="DEVOLUCIÓN">DEVOLUCIÓN (+)</option>
+                  <option value="ENTREGA">ENTREGA (-)</option>
+                  <option value="CONSUMO">CONSUMO (-)</option>
+                  <option value="AJUSTE">AJUSTE</option>
+                  <option value="BAJA">BAJA (-)</option>
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label small fw-bold">Cantidad (*):</label>
+                <input type="number" id="mov-cantidad" class="form-control form-control-sm" min="1" step="1" required>
+              </div>
+            </div>
+
+            <div class="mb-2" id="mov-ajuste-box" style="display: none;">
+              <label class="form-label small fw-bold">Dirección del Ajuste:</label>
+              <select id="mov-ajuste-direccion" class="form-select form-select-sm">
+                <option value="POSITIVO">Aumenta el stock (+)</option>
+                <option value="NEGATIVO">Disminuye el stock (-)</option>
+              </select>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Responsable / Solicitante / Proveedor:</label>
+              <input type="text" id="mov-responsable" class="form-control form-control-sm"
+                placeholder="Ej: Dirección Financiera / Proveedor X">
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Observación / Documento de Respaldo:</label>
+              <textarea id="mov-observacion" class="form-control form-control-sm" rows="2"
+                placeholder="Factura Nro, Memorando de requerimiento..."></textarea>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarMovimiento()">Registrar y
+            Actualizar Stock</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: USUARIO -->
+  <div class="modal fade" id="modal-usuario" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold">Gestión de Usuario</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-usuario">
+            <input type="hidden" id="usuario-id" value="">
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Nombre Completo (*):</label>
+              <input type="text" id="usuario-nombre" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Correo Institucional (*):</label>
+              <input type="email" id="usuario-email" class="form-control form-control-sm" required>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Contraseña:</label>
+              <input type="password" id="usuario-password" class="form-control form-control-sm" placeholder="••••••••">
+              <div id="usuario-pass-help" class="form-text small"></div>
+            </div>
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label small fw-bold">Rol Institucional (*):</label>
+                <select id="usuario-rol" class="form-select form-select-sm">
+                  <option value="ADMINISTRADOR">ADMINISTRADOR</option>
+                  <option value="INVENTARIADOR">INVENTARIADOR</option>
+                  <option value="CONSULTA">CONSULTA</option>
+                </select>
+              </div>
+              <div class="col-6">
+                <label class="form-label small fw-bold">Estado:</label>
+                <select id="usuario-estado" class="form-select form-select-sm">
+                  <option value="ACTIVO">ACTIVO</option>
+                  <option value="INACTIVO">INACTIVO</option>
+                </select>
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarUsuario()">Guardar
+            Usuario</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: CAMBIAR MI CONTRASEÑA -->
+  <div class="modal fade" id="modal-password" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-sm">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title fw-bold"><i class="bi bi-key me-1"></i> Cambiar contraseña</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="form-password" autocomplete="off" onsubmit="return false;">
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Contraseña actual:</label>
+              <input type="password" id="pwd-actual" class="form-control form-control-sm" autocomplete="current-password">
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Nueva contraseña:</label>
+              <input type="password" id="pwd-nueva" class="form-control form-control-sm" autocomplete="new-password">
+              <div class="form-text small">Mínimo 8 caracteres, con letras y números.</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small fw-bold">Repita la nueva contraseña:</label>
+              <input type="password" id="pwd-repetir" class="form-control form-control-sm" autocomplete="new-password">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary-custom btn-sm" onclick="App.guardarPassword()">Actualizar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- OVERLAY DE CARGA GLOBAL -->
+  <div id="global-loading-overlay"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.7); z-index: 9999; align-items: center; justify-content: center; flex-direction: column; color: #fff;">
+    <div class="spinner-border text-light" style="width: 3.5rem; height: 3.5rem;" role="status"></div>
+    <div id="global-loading-message" class="mt-3 fs-6 fw-bold">Procesando solicitud...</div>
+  </div>
+
+  <!-- CONTENEDOR DE NOTIFICACIONES FLOTANTES (TOASTS) -->
+  <div id="toast-notification-container"
+    style="position: fixed; top: 1.5rem; right: 1.5rem; z-index: 1060; min-width: 280px; max-width: 400px;"></div>
+
+  <!-- SCRIPTS EXTERNOS Y DEL SISTEMA -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- Inclusión de Módulos Javascript -->
+  <?!= include('app_js'); ?>
+  <?!= include('charts_js'); ?>
+  <?!= include('scanner_js'); ?>
+  <?!= include('mejoras_js'); ?>
+
+</body>
+
+</html>
